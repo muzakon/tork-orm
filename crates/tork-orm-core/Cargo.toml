@@ -15,12 +15,14 @@ rusqlite = { workspace = true, optional = true }
 tork-core = { workspace = true, optional = true }
 
 [features]
-default = ["sqlite", "tork"]
+default = ["sqlite", "tork", "migrations"]
 # Bundled SQLite backend. The only database backend in this phase.
 sqlite = ["dep:rusqlite"]
 # Reserved for future backends; each adds its own driver and dialect.
 postgres = []
 mysql = []
+# Schema migrations (the migration engine). Pure code, no extra dependency.
+migrations = []
 # Native integration with the Tork web framework (error bridge and resource
 # injection). Disable for a standalone async ORM.
 tork = ["dep:tork-core"]

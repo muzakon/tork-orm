@@ -1,6 +1,6 @@
 //! The SQLite dialect.
 
-use super::{Dialect, SqlType};
+use super::{Dialect, DialectKind, SqlType};
 
 /// SQL generation for SQLite.
 ///
@@ -32,6 +32,10 @@ impl SqliteDialect {
 impl Dialect for SqliteDialect {
     fn name(&self) -> &'static str {
         "sqlite"
+    }
+
+    fn kind(&self) -> DialectKind {
+        DialectKind::Sqlite
     }
 
     fn quote_identifier(&self, identifier: &str, out: &mut String) {

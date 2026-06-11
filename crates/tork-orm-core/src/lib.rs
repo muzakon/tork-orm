@@ -15,6 +15,9 @@ pub mod query;
 
 pub mod preload;
 
+#[cfg(feature = "migrations")]
+pub mod migration;
+
 #[cfg(feature = "tork")]
 mod bridge;
 

@@ -19,6 +19,20 @@ pub use writer::{
     render_select, render_update,
 };
 
+/// Identifies a database backend.
+///
+/// Used where rendering branches on the backend (notably DDL, where constructs
+/// like auto-increment columns differ between databases).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialectKind {
+    /// SQLite.
+    Sqlite,
+    /// PostgreSQL (reserved for a future backend).
+    Postgres,
+    /// MySQL (reserved for a future backend).
+    Mysql,
+}
+
 /// An abstract column type, independent of any backend.
 ///
 /// Models record one of these per column (derived from the field's Rust type and
@@ -53,6 +67,12 @@ pub enum SqlType {
 pub trait Dialect: Send + Sync + 'static {
     /// Returns the dialect's stable name, for diagnostics.
     fn name(&self) -> &'static str;
+
+    /// Returns which backend this dialect targets.
+    ///
+    /// Lets backend-neutral rendering branch on the few constructs that differ
+    /// between databases without downcasting.
+    fn kind(&self) -> DialectKind;
 
     /// Writes a quoted identifier (table or column name) into `out`.
     ///
