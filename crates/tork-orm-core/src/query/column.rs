@@ -171,9 +171,40 @@ impl<M, T> Column<M, T> {
         Expr::aggregate(AggFunc::Count, self.expr())
     }
 
+    /// `lower(column)`.
+    pub fn lower(self) -> Expr {
+        Expr::func("lower", [self.expr()])
+    }
+
+    /// `upper(column)`.
+    pub fn upper(self) -> Expr {
+        Expr::func("upper", [self.expr()])
+    }
+
+    /// `length(column)`.
+    pub fn length(self) -> Expr {
+        Expr::func("length", [self.expr()])
+    }
+
+    /// `trim(column)`.
+    pub fn trim(self) -> Expr {
+        Expr::func("trim", [self.expr()])
+    }
+
+    /// `abs(column)`.
+    pub fn abs(self) -> Expr {
+        Expr::func("abs", [self.expr()])
+    }
+
     /// Builds a binary comparison against a bound value.
     fn compare<V: IntoSqlValue<T>>(self, op: BinaryOp, value: V) -> Expr {
         Expr::binary(self.expr(), op, Expr::value(value.into_sql_value()))
+    }
+}
+
+impl<M, T> From<Column<M, T>> for Expr {
+    fn from(column: Column<M, T>) -> Self {
+        column.expr()
     }
 }
 
