@@ -118,6 +118,14 @@ impl SqlitePool {
             .await
     }
 
+    /// Runs a batch of semicolon-separated statements with no bound parameters.
+    ///
+    /// Used to apply a migration's SQL, which may hold several statements.
+    pub async fn execute_batch(&self, sql: String) -> crate::Result<()> {
+        self.with_connection(move |conn| execute_batch(conn, &sql))
+            .await
+    }
+
     /// Returns the number of statements run through this pool so far.
     ///
     /// Useful in tests to confirm a query strategy (for example, that preloading
@@ -305,6 +313,12 @@ fn fetch_all(conn: &mut Connection, sql: &str, params: &[Value]) -> crate::Resul
     Ok(out)
 }
 
+/// Runs a batch of statements (no parameters) against a connection.
+fn execute_batch(conn: &mut Connection, sql: &str) -> crate::Result<()> {
+    conn.execute_batch(sql)
+        .map_err(|e| OrmError::query("statement batch failed").with_source(e))
+}
+
 /// Runs a non-row-returning statement against a connection.
 fn execute(conn: &mut Connection, sql: &str, params: &[Value]) -> crate::Result<ExecuteResult> {
     let affected = conn
@@ -373,6 +387,22 @@ impl PinnedSqlite {
         let mut conn = self.take_conn()?;
         let (conn, result) = tokio::task::spawn_blocking(move || {
             let result = execute(&mut conn, &sql, &params);
+            (conn, result)
+        })
+        .await
+        .map_err(|e| OrmError::query(format!("database worker failed: {e}")))?;
+        self.put_conn(conn);
+        result
+    }
+
+    /// Runs a batch of statements on the pinned connection.
+    // Used by the file migrator (next commit).
+    #[allow(dead_code)]
+    pub(crate) async fn execute_batch(&self, sql: String) -> crate::Result<()> {
+        self.inner.statements.fetch_add(1, Ordering::Relaxed);
+        let mut conn = self.take_conn()?;
+        let (conn, result) = tokio::task::spawn_blocking(move || {
+            let result = execute_batch(&mut conn, &sql);
             (conn, result)
         })
         .await

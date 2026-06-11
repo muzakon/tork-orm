@@ -94,6 +94,14 @@ impl Database {
         }
     }
 
+    /// Runs a batch of semicolon-separated statements with no bound parameters.
+    pub async fn execute_batch(&self, sql: String) -> crate::Result<()> {
+        match &self.backend {
+            #[cfg(feature = "sqlite")]
+            Backend::Sqlite(pool) => pool.execute_batch(sql).await,
+        }
+    }
+
     /// Returns the number of statements run through this database so far.
     ///
     /// Useful in tests to confirm a query strategy (such as preloading adding one
@@ -161,6 +169,19 @@ impl crate::executor::Executor for Pinned {
         match &self.backend {
             #[cfg(feature = "sqlite")]
             PinnedBackend::Sqlite(pinned) => pinned.execute(sql, params).await,
+        }
+    }
+}
+
+#[cfg(feature = "migrations")]
+impl Pinned {
+    /// Runs a batch of statements on the pinned connection.
+    // Used by the file migrator (next commit).
+    #[allow(dead_code)]
+    pub(crate) async fn execute_batch(&self, sql: String) -> crate::Result<()> {
+        match &self.backend {
+            #[cfg(feature = "sqlite")]
+            PinnedBackend::Sqlite(pinned) => pinned.execute_batch(sql).await,
         }
     }
 }

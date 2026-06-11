@@ -102,3 +102,32 @@ async fn nullable_columns_map_to_option() {
         Some("ace".to_string())
     );
 }
+
+/// A batch runs several semicolon-separated statements in one call.
+#[tokio::test]
+async fn execute_batch_runs_multiple_statements() {
+    let db = Database::connect(":memory:", 1).await.unwrap();
+    db.execute_batch(
+        "CREATE TABLE a (id INTEGER PRIMARY KEY); \
+         CREATE TABLE b (id INTEGER PRIMARY KEY); \
+         INSERT INTO a (id) VALUES (1), (2);"
+            .into(),
+    )
+    .await
+    .unwrap();
+
+    let count = db
+        .fetch_all("SELECT COUNT(*) FROM a".into(), vec![])
+        .await
+        .unwrap();
+    assert_eq!(count[0].get_index::<i64>(0).unwrap(), 2);
+
+    let table_b = db
+        .fetch_all(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'b'".into(),
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert_eq!(table_b.len(), 1);
+}
