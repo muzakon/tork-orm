@@ -5,20 +5,14 @@
 //! reads and writes are rendered through the dialect (via [`QueryWriter`]) so they
 //! work on any backend.
 
-use time::format_description::well_known::Rfc3339;
-use time::OffsetDateTime;
-
 use crate::database::Database;
-use crate::dialect::{Dialect, QueryWriter};
+use crate::dialect::Dialect;
 use crate::executor::Executor;
-use crate::value::Value;
 
 use super::checksum::checksum_of;
-use super::ddl::{ColumnSpec, TableDef};
 use super::registry::{MigrationSet, MigrationTrait, MigrationTransaction};
-use super::render;
 use super::schema::SchemaManager;
-use crate::dialect::SqlType;
+use super::store;
 
 /// The default bookkeeping table name.
 const DEFAULT_TABLE: &str = "_tork_migrations";
@@ -99,20 +93,20 @@ impl<'d> Migrator<'d> {
         // Pin one connection so each migration's statements (including BEGIN/COMMIT)
         // run on the same connection regardless of the pool size.
         let executor = self.db.pinned().await?;
-        self.ensure_table(&executor).await?;
-        let records = self.applied_records(&executor).await?;
+        store::ensure_table(&executor, &self.table).await?;
+        let records = store::applied_records(&executor, &self.table).await?;
         // Every migration applied in this run shares one batch number.
-        let batch = self.next_batch(&executor).await?;
+        let batch = store::next_batch(&executor, &self.table).await?;
         let mut count = 0;
 
         for migration in self.set.sorted() {
             let checksum = self.checksum_for(migration).await?;
-            if let Some((_, stored)) = records
+            if let Some(record) = records
                 .iter()
-                .find(|(revision, _)| revision == migration.revision())
+                .find(|record| record.revision == migration.revision())
             {
-                if stored != &checksum {
-                    self.report_mismatch(migration.revision(), stored, &checksum)?;
+                if record.checksum != checksum {
+                    self.report_mismatch(migration.revision(), &record.checksum, &checksum)?;
                 }
                 continue;
             }
@@ -145,9 +139,11 @@ impl<'d> Migrator<'d> {
         let start = std::time::Instant::now();
         migration.up(&mut schema).await?;
         let elapsed_ms = start.elapsed().as_millis() as i64;
-        self.record(
+        store::record(
             executor,
+            &self.table,
             migration.revision(),
+            None,
             migration.name(),
             checksum,
             batch,
@@ -192,16 +188,16 @@ impl<'d> Migrator<'d> {
 
     /// Reports the applied state of every migration in the set.
     pub async fn status(&self) -> crate::Result<Vec<MigrationStatus>> {
-        self.ensure_table(self.db).await?;
-        let records = self.applied_records(self.db).await?;
+        store::ensure_table(self.db, &self.table).await?;
+        let records = store::applied_records(self.db, &self.table).await?;
         let mut statuses = Vec::new();
 
         for migration in self.set.sorted() {
             let checksum = self.checksum_for(migration).await?;
             let checksum_matches = records
                 .iter()
-                .find(|(revision, _)| revision == migration.revision())
-                .map(|(_, stored)| stored == &checksum);
+                .find(|record| record.revision == migration.revision())
+                .map(|record| record.checksum == checksum);
             statuses.push(MigrationStatus {
                 revision: migration.revision().to_string(),
                 name: migration.name().to_string(),
@@ -245,8 +241,8 @@ impl<'d> Migrator<'d> {
     /// Returns the number reverted.
     pub async fn down(&self, steps: usize) -> crate::Result<usize> {
         let executor = self.db.pinned().await?;
-        self.ensure_table(&executor).await?;
-        let revisions = self.recent_revisions(&executor, steps).await?;
+        store::ensure_table(&executor, &self.table).await?;
+        let revisions = store::recent_revisions(&executor, &self.table, steps).await?;
         let mut count = 0;
 
         for revision in revisions {
@@ -280,176 +276,6 @@ impl<'d> Migrator<'d> {
     ) -> crate::Result<()> {
         let mut schema = SchemaManager::executing(executor);
         migration.down(&mut schema).await?;
-        self.delete_record(executor, revision).await
-    }
-
-    /// The schema of the bookkeeping table.
-    fn table_def(&self) -> TableDef {
-        let text = |name: &str| ColumnSpec::new(name, SqlType::Text);
-        let mut id = ColumnSpec::new("id", SqlType::BigInt);
-        id.primary_key = true;
-        id.auto_increment = true;
-        let mut revision = text("revision");
-        revision.unique = true;
-
-        TableDef {
-            name: self.table.clone(),
-            if_not_exists: true,
-            columns: vec![
-                id,
-                revision,
-                text("name"),
-                text("checksum"),
-                ColumnSpec::new("batch", SqlType::Integer),
-                text("applied_at"),
-                ColumnSpec::new("execution_time_ms", SqlType::BigInt),
-            ],
-            primary_key: Vec::new(),
-            foreign_keys: Vec::new(),
-            indexes: Vec::new(),
-        }
-    }
-
-    /// Creates the bookkeeping table if it does not already exist.
-    async fn ensure_table<E: Executor + Sync>(&self, executor: &E) -> crate::Result<()> {
-        for statement in render::create_table(executor.dialect(), &self.table_def()) {
-            executor.execute(statement, Vec::new()).await?;
-        }
-        Ok(())
-    }
-
-    /// Returns every recorded `(revision, checksum)` pair.
-    async fn applied_records<E: Executor + Sync>(
-        &self,
-        executor: &E,
-    ) -> crate::Result<Vec<(String, String)>> {
-        let mut writer = QueryWriter::new(executor.dialect());
-        writer.push_sql("SELECT ");
-        writer.push_identifier("revision");
-        writer.push_sql(", ");
-        writer.push_identifier("checksum");
-        writer.push_sql(" FROM ");
-        writer.push_identifier(&self.table);
-        let (sql, params) = writer.finish();
-
-        let rows = executor.fetch_all(sql, params).await?;
-        rows.iter()
-            .map(|row| Ok((row.get::<String>("revision")?, row.get::<String>("checksum")?)))
-            .collect()
-    }
-
-    /// Returns the recorded revisions most-recent first, capped at `limit`.
-    async fn recent_revisions<E: Executor + Sync>(
-        &self,
-        executor: &E,
-        limit: usize,
-    ) -> crate::Result<Vec<String>> {
-        let mut writer = QueryWriter::new(executor.dialect());
-        writer.push_sql("SELECT ");
-        writer.push_identifier("revision");
-        writer.push_sql(" FROM ");
-        writer.push_identifier(&self.table);
-        writer.push_sql(" ORDER BY ");
-        writer.push_identifier("batch");
-        writer.push_sql(" DESC, ");
-        writer.push_identifier("revision");
-        writer.push_sql(" DESC");
-        let (sql, params) = writer.finish();
-
-        let rows = executor.fetch_all(sql, params).await?;
-        rows.iter()
-            .take(limit)
-            .map(|row| row.get::<String>("revision"))
-            .collect()
-    }
-
-    /// Returns the next batch number (`max(batch) + 1`, or `1`).
-    async fn next_batch<E: Executor + Sync>(&self, executor: &E) -> crate::Result<i64> {
-        let mut writer = QueryWriter::new(executor.dialect());
-        writer.push_sql("SELECT MAX(");
-        writer.push_identifier("batch");
-        writer.push_sql(") FROM ");
-        writer.push_identifier(&self.table);
-        let (sql, params) = writer.finish();
-
-        let rows = executor.fetch_all(sql, params).await?;
-        let current = match rows.first() {
-            Some(row) => row.get_index::<Option<i64>>(0)?.unwrap_or(0),
-            None => 0,
-        };
-        Ok(current + 1)
-    }
-
-    /// Inserts a bookkeeping row for an applied migration.
-    async fn record<E: Executor + Sync>(
-        &self,
-        executor: &E,
-        revision: &str,
-        name: &str,
-        checksum: &str,
-        batch: i64,
-        execution_time_ms: i64,
-    ) -> crate::Result<()> {
-        let applied_at = OffsetDateTime::now_utc()
-            .format(&Rfc3339)
-            .unwrap_or_default();
-        let columns = [
-            "revision",
-            "name",
-            "checksum",
-            "batch",
-            "applied_at",
-            "execution_time_ms",
-        ];
-        let values = vec![
-            Value::Text(revision.to_string()),
-            Value::Text(name.to_string()),
-            Value::Text(checksum.to_string()),
-            Value::Int(batch),
-            Value::Text(applied_at),
-            Value::Int(execution_time_ms),
-        ];
-
-        let mut writer = QueryWriter::new(executor.dialect());
-        writer.push_sql("INSERT INTO ");
-        writer.push_identifier(&self.table);
-        writer.push_sql(" (");
-        for (index, column) in columns.iter().enumerate() {
-            if index != 0 {
-                writer.push_sql(", ");
-            }
-            writer.push_identifier(column);
-        }
-        writer.push_sql(") VALUES (");
-        for (index, value) in values.into_iter().enumerate() {
-            if index != 0 {
-                writer.push_sql(", ");
-            }
-            writer.push_bind(value);
-        }
-        writer.push_sql(")");
-        let (sql, params) = writer.finish();
-
-        executor.execute(sql, params).await?;
-        Ok(())
-    }
-
-    /// Removes the bookkeeping row for a reverted migration.
-    async fn delete_record<E: Executor + Sync>(
-        &self,
-        executor: &E,
-        revision: &str,
-    ) -> crate::Result<()> {
-        let mut writer = QueryWriter::new(executor.dialect());
-        writer.push_sql("DELETE FROM ");
-        writer.push_identifier(&self.table);
-        writer.push_sql(" WHERE ");
-        writer.push_identifier("revision");
-        writer.push_sql(" = ");
-        writer.push_bind(Value::Text(revision.to_string()));
-        let (sql, params) = writer.finish();
-
-        executor.execute(sql, params).await?;
-        Ok(())
+        store::delete_record(executor, &self.table, revision).await
     }
 }

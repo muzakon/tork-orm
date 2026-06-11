@@ -176,8 +176,6 @@ impl crate::executor::Executor for Pinned {
 #[cfg(feature = "migrations")]
 impl Pinned {
     /// Runs a batch of statements on the pinned connection.
-    // Used by the file migrator (next commit).
-    #[allow(dead_code)]
     pub(crate) async fn execute_batch(&self, sql: String) -> crate::Result<()> {
         match &self.backend {
             #[cfg(feature = "sqlite")]

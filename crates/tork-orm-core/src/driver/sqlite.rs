@@ -396,8 +396,6 @@ impl PinnedSqlite {
     }
 
     /// Runs a batch of statements on the pinned connection.
-    // Used by the file migrator (next commit).
-    #[allow(dead_code)]
     pub(crate) async fn execute_batch(&self, sql: String) -> crate::Result<()> {
         self.inner.statements.fetch_add(1, Ordering::Relaxed);
         let mut conn = self.take_conn()?;

@@ -41,10 +41,13 @@ use std::pin::Pin;
 
 pub mod checksum;
 pub mod ddl;
+pub mod files;
 pub mod registry;
 pub mod render;
 pub mod runner;
 pub mod schema;
+
+mod store;
 
 /// A boxed, `Send` future borrowing for `'a`.
 ///
@@ -56,6 +59,7 @@ pub use ddl::{
     AlterAction, AlterTable, ColumnSpec, DefaultValue, ForeignKeyAction, ForeignKeySpec, IndexSpec,
     TableDef,
 };
+pub use files::{Applied, FileMigrator, FileStatus};
 pub use registry::{boxed, MigrationSet, MigrationTrait, MigrationTransaction};
 pub use runner::{MigrationStatus, Migrator, OnMismatch};
 pub use schema::{Column, CreateTable, DropTable, DynExecutor, ForeignKey, SchemaManager};
