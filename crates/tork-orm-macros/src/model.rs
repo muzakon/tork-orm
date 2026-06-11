@@ -36,12 +36,30 @@ struct TableIndex {
     include: Vec<Ident>,
 }
 
-/// One column reference inside an index's `fields = [...]` list, with its optional
-/// ordering and operator class.
+/// One entry inside an index's `fields = [...]` list: a plain column or an
+/// `expr(...)` functional expression, with its optional ordering, null placement,
+/// collation, and operator class.
 struct IndexFieldEntry {
-    ident: Ident,
+    target: FieldTarget,
     descending: bool,
+    nulls: Option<NullsSetting>,
+    collation: Option<LitStr>,
     opclass: Option<LitStr>,
+}
+
+/// What an index entry indexes.
+enum FieldTarget {
+    /// A model field, referenced by name.
+    Column(Ident),
+    /// A functional expression, such as `lower(email)`.
+    Expression(Expr),
+}
+
+/// The `NULLS FIRST`/`NULLS LAST` placement requested for an entry.
+#[derive(Clone, Copy)]
+enum NullsSetting {
+    First,
+    Last,
 }
 
 impl Parse for TableArgs {
@@ -140,7 +158,8 @@ impl Parse for TableIndex {
                     "expr" => {
                         return Err(syn::Error::new(
                             key.span(),
-                            "expression indexes are not supported yet",
+                            "use a per-column `expr(...)` entry inside `fields = [...]` \
+                             instead of a top-level `expr`",
                         ));
                     }
                     other => {
@@ -169,31 +188,52 @@ impl Parse for TableIndex {
 
 impl Parse for IndexFieldEntry {
     fn parse(input: ParseStream) -> syn::Result<Self> {
+        // An `expr( <expression> [, modifier]* )` entry indexes an expression; a
+        // bare ident (optionally followed by `( modifier... )`) indexes a column.
+        // The two are told apart by the literal `expr` keyword before the parens.
+        let is_expression = input.peek(Ident)
+            && input.peek2(syn::token::Paren)
+            && input
+                .fork()
+                .parse::<Ident>()
+                .map(|ident| ident == "expr")
+                .unwrap_or(false);
+
+        if is_expression {
+            let _keyword: Ident = input.parse()?;
+            let inner;
+            syn::parenthesized!(inner in input);
+            let expression: Expr = inner.parse()?;
+            let mut entry = IndexFieldEntry {
+                target: FieldTarget::Expression(expression),
+                descending: false,
+                nulls: None,
+                collation: None,
+                opclass: None,
+            };
+            while inner.peek(Token![,]) {
+                inner.parse::<Token![,]>()?;
+                if inner.is_empty() {
+                    break;
+                }
+                parse_index_modifier(&inner, &mut entry)?;
+            }
+            return Ok(entry);
+        }
+
         let ident: Ident = input.parse()?;
         let mut entry = IndexFieldEntry {
-            ident,
+            target: FieldTarget::Column(ident),
             descending: false,
+            nulls: None,
+            collation: None,
             opclass: None,
         };
         if input.peek(syn::token::Paren) {
             let inner;
             syn::parenthesized!(inner in input);
             while !inner.is_empty() {
-                let modifier: Ident = inner.parse()?;
-                match modifier.to_string().as_str() {
-                    "asc" => entry.descending = false,
-                    "desc" => entry.descending = true,
-                    "opclass" => {
-                        inner.parse::<Token![=]>()?;
-                        entry.opclass = Some(inner.parse()?);
-                    }
-                    other => {
-                        return Err(syn::Error::new(
-                            modifier.span(),
-                            format!("unknown column modifier `{other}`"),
-                        ));
-                    }
-                }
+                parse_index_modifier(&inner, &mut entry)?;
                 if inner.is_empty() {
                     break;
                 }
@@ -202,6 +242,33 @@ impl Parse for IndexFieldEntry {
         }
         Ok(entry)
     }
+}
+
+/// Parses one `asc`/`desc`/`nulls_first`/`nulls_last`/`opclass = ".."`/
+/// `collate = ".."` modifier into `entry`.
+fn parse_index_modifier(inner: ParseStream, entry: &mut IndexFieldEntry) -> syn::Result<()> {
+    let modifier: Ident = inner.parse()?;
+    match modifier.to_string().as_str() {
+        "asc" => entry.descending = false,
+        "desc" => entry.descending = true,
+        "nulls_first" => entry.nulls = Some(NullsSetting::First),
+        "nulls_last" => entry.nulls = Some(NullsSetting::Last),
+        "opclass" => {
+            inner.parse::<Token![=]>()?;
+            entry.opclass = Some(inner.parse()?);
+        }
+        "collate" => {
+            inner.parse::<Token![=]>()?;
+            entry.collation = Some(inner.parse()?);
+        }
+        other => {
+            return Err(syn::Error::new(
+                modifier.span(),
+                format!("unknown column modifier `{other}`"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Rewrites bare field identifiers in an index predicate into `Self::<ident>` so
@@ -363,7 +430,10 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         .indexes
         .iter()
         .filter_map(|index| index.fields.first())
-        .map(|entry| entry.ident.to_string())
+        .filter_map(|entry| match &entry.target {
+            FieldTarget::Column(ident) => Some(ident.to_string()),
+            FieldTarget::Expression(_) => None,
+        })
         .collect();
 
     for field in &named.named {
@@ -570,11 +640,34 @@ fn table_index_tokens(
     let mut column_names: Vec<String> = Vec::new();
     let mut column_tokens: Vec<TokenStream2> = Vec::new();
     for entry in &index.fields {
-        let column = lookup(&entry.ident)?;
-        column_names.push(column.clone());
-        let mut tokens = quote!(#krate::IndexColumn::new(#column));
+        let mut tokens = match &entry.target {
+            FieldTarget::Column(ident) => {
+                let column = lookup(ident)?;
+                column_names.push(column.clone());
+                quote!(#krate::IndexColumn::new(#column))
+            }
+            FieldTarget::Expression(expression) => {
+                // The bare field idents in the expression resolve to the generated
+                // `Column` constants, the same lowering used for partial predicates.
+                let mut rewritten = expression.clone();
+                let mut rewriter = FieldPathRewriter {
+                    fields: field_names.clone(),
+                };
+                rewriter.visit_expr_mut(&mut rewritten);
+                column_names.push("expr".to_string());
+                quote!(#krate::IndexColumn::expression(#rewritten))
+            }
+        };
         if entry.descending {
             tokens = quote!(#tokens.desc());
+        }
+        match entry.nulls {
+            Some(NullsSetting::First) => tokens = quote!(#tokens.nulls_first()),
+            Some(NullsSetting::Last) => tokens = quote!(#tokens.nulls_last()),
+            None => {}
+        }
+        if let Some(collation) = &entry.collation {
+            tokens = quote!(#tokens.collate(#collation));
         }
         if let Some(opclass) = &entry.opclass {
             tokens = quote!(#tokens.opclass(#opclass));
