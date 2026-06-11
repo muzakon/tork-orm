@@ -42,6 +42,7 @@ use std::pin::Pin;
 pub mod checksum;
 pub mod ddl;
 pub mod files;
+pub mod introspect;
 pub mod registry;
 pub mod render;
 pub mod runner;
