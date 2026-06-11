@@ -53,6 +53,9 @@ struct FieldArgs {
     primary_key: bool,
     auto: bool,
     unique: bool,
+    /// `index` requests a single-column index; `index = false` on a foreign key
+    /// suppresses its automatic index. `None` means the attribute was absent.
+    index: Option<bool>,
     varchar_len: Option<u32>,
     foreign_key: Option<Path>,
     column: Option<String>,
@@ -68,6 +71,17 @@ impl Parse for FieldArgs {
                 "primary_key" => args.primary_key = true,
                 "auto" => args.auto = true,
                 "unique" => args.unique = true,
+                "index" => {
+                    // Bare `index` enables a single-column index; `index = false`
+                    // (or `= true`) toggles a foreign key's automatic index.
+                    if input.peek(Token![=]) {
+                        input.parse::<Token![=]>()?;
+                        let lit: syn::LitBool = input.parse()?;
+                        args.index = Some(lit.value);
+                    } else {
+                        args.index = Some(true);
+                    }
+                }
                 "varchar" => {
                     // varchar(length = N)
                     let content;
@@ -153,6 +167,9 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     let mut from_row_fields: Vec<TokenStream2> = Vec::new();
     let mut insert_entries: Vec<TokenStream2> = Vec::new();
     let mut primary_key: Option<(Ident, String)> = None;
+    // Indexes built from the field-level attributes (`unique`/`index`) plus the
+    // automatic index on each foreign key.
+    let mut index_defs: Vec<TokenStream2> = Vec::new();
 
     for field in &named.named {
         let field_ident = field.ident.as_ref().expect("named field");
@@ -191,9 +208,23 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
 
         let primary_key_flag = args.primary_key;
         let auto_flag = args.auto;
-        let unique_flag = args.unique;
-        // `unique` is recorded for future migrations; silence the unused read.
-        let _ = unique_flag;
+
+        // A `unique` field becomes a unique single-column index; a plain `index`
+        // field becomes a non-unique one. A foreign key gets an automatic index
+        // unless an explicit index already covers the column or `index = false`
+        // opts out.
+        let field_indexed = if args.unique {
+            index_defs.push(field_index_tokens(&krate, &table_name, &column_name, true));
+            true
+        } else if args.index == Some(true) {
+            index_defs.push(field_index_tokens(&krate, &table_name, &column_name, false));
+            true
+        } else {
+            false
+        };
+        if args.foreign_key.is_some() && !field_indexed && args.index != Some(false) {
+            index_defs.push(field_index_tokens(&krate, &table_name, &column_name, false));
+        }
 
         column_defs.push(quote!(#krate::ColumnDef {
             name: #column_name,
@@ -240,6 +271,18 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         ));
     };
 
+    // Only override `Model::indexes` when the model actually declares some; an
+    // empty list is identical to the trait default.
+    let indexes_fn = if index_defs.is_empty() {
+        quote!()
+    } else {
+        quote! {
+            fn indexes() -> ::std::vec::Vec<#krate::IndexDef> {
+                ::std::vec![ #(#index_defs),* ]
+            }
+        }
+    };
+
     Ok(quote! {
         impl #ident {
             #(#column_consts)*
@@ -269,8 +312,39 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             fn primary_key_value(&self) -> #krate::Value {
                 #krate::BindValue::to_value(&self.#pk_field)
             }
+
+            #indexes_fn
         }
     })
+}
+
+/// Builds the tokens for a single-column [`IndexDef`] over `column`, auto-named
+/// from the table and column.
+fn field_index_tokens(
+    krate: &TokenStream2,
+    table: &str,
+    column: &str,
+    unique: bool,
+) -> TokenStream2 {
+    let name = auto_index_name(table, std::slice::from_ref(&column.to_string()), unique);
+    quote!({
+        let mut __index = #krate::IndexDef::new(#name);
+        __index.columns = ::std::vec![ #krate::IndexColumn::new(#column) ];
+        __index.unique = #unique;
+        __index
+    })
+}
+
+/// Auto-names an index from its table and column names: `<table>_<col...>_idx`,
+/// or `<table>_<col...>_key` for a unique index.
+fn auto_index_name(table: &str, columns: &[String], unique: bool) -> String {
+    let mut name = String::from(table);
+    for column in columns {
+        name.push('_');
+        name.push_str(column);
+    }
+    name.push_str(if unique { "_key" } else { "_idx" });
+    name
 }
 
 /// Splits a `Type::column` foreign-key path into the referenced type path and the
