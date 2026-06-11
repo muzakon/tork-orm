@@ -8,6 +8,8 @@
 use crate::dialect::{Dialect, DialectKind, SqlType};
 use crate::driver::ExecuteResult;
 use crate::executor::Executor;
+use crate::index::{IndexColumn, IndexDef};
+use crate::query::expr::Expr;
 use crate::row::Row;
 use crate::value::Value;
 
@@ -151,6 +153,29 @@ impl<'e> SchemaManager<'e> {
         }
     }
 
+    /// Begins a `CREATE INDEX` named `name`.
+    ///
+    /// Set the table with [`CreateIndex::on_table`] and the columns with
+    /// [`CreateIndex::column`] / [`CreateIndex::columns`] before calling
+    /// [`CreateIndex::execute`].
+    pub fn create_index(&mut self, name: &str) -> CreateIndex<'_, 'e> {
+        CreateIndex {
+            schema: self,
+            table: String::new(),
+            def: IndexDef::new(name),
+            if_not_exists: false,
+        }
+    }
+
+    /// Begins a `DROP INDEX` for the index named `name`.
+    pub fn drop_index(&mut self, name: &str) -> DropIndex<'_, 'e> {
+        DropIndex {
+            schema: self,
+            name: name.to_string(),
+            if_exists: false,
+        }
+    }
+
     /// Runs verbatim SQL. The caller owns its correctness and escaping.
     pub async fn raw(&mut self, sql: &str) -> crate::Result<()> {
         self.dispatch(vec![sql.to_string()]).await
@@ -233,6 +258,124 @@ impl DropTable<'_, '_> {
     /// Renders and applies the statement.
     pub async fn execute(self) -> crate::Result<()> {
         let statement = render::drop_table(self.schema.dialect, &self.name, self.if_exists);
+        self.schema.dispatch(vec![statement]).await
+    }
+}
+
+/// A `CREATE INDEX` builder.
+///
+/// # Examples
+///
+/// ```
+/// use tork_orm_core::dialect::SqliteDialect;
+/// use tork_orm_core::migration::{IndexColumn, SchemaManager};
+///
+/// # async fn run() -> tork_orm_core::Result<()> {
+/// let dialect = SqliteDialect::new();
+/// let mut schema = SchemaManager::collect(&dialect);
+/// schema
+///     .create_index("idx_posts_user_created")
+///     .on_table("posts")
+///     .unique()
+///     .columns([IndexColumn::new("user_id"), IndexColumn::new("created_at").desc()])
+///     .execute()
+///     .await?;
+/// let sql = schema.into_collected();
+/// assert_eq!(
+///     sql[0],
+///     "CREATE UNIQUE INDEX \"idx_posts_user_created\" ON \"posts\" \
+///      (\"user_id\", \"created_at\" DESC)"
+/// );
+/// # Ok(())
+/// # }
+/// ```
+pub struct CreateIndex<'a, 'e> {
+    schema: &'a mut SchemaManager<'e>,
+    table: String,
+    def: IndexDef,
+    if_not_exists: bool,
+}
+
+impl CreateIndex<'_, '_> {
+    /// Sets the table the index is on.
+    pub fn on_table(mut self, table: &str) -> Self {
+        self.table = table.to_string();
+        self
+    }
+
+    /// Marks the index `UNIQUE`.
+    pub fn unique(mut self) -> Self {
+        self.def.unique = true;
+        self
+    }
+
+    /// Adds a single column.
+    pub fn column(mut self, column: IndexColumn) -> Self {
+        self.def.columns.push(column);
+        self
+    }
+
+    /// Adds several columns at once.
+    pub fn columns(mut self, columns: impl IntoIterator<Item = IndexColumn>) -> Self {
+        self.def.columns.extend(columns);
+        self
+    }
+
+    /// Sets the index method (`USING`); supported only on backends that have one.
+    pub fn method(mut self, method: impl Into<String>) -> Self {
+        self.def.method = Some(method.into());
+        self
+    }
+
+    /// Adds covering columns (`INCLUDE`); supported only on backends that have them.
+    pub fn include<I, S>(mut self, columns: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.def
+            .include
+            .extend(columns.into_iter().map(Into::into));
+        self
+    }
+
+    /// Restricts the index to rows matching `predicate` (a partial index).
+    pub fn where_(mut self, predicate: Expr) -> Self {
+        self.def.predicate = Some(predicate);
+        self
+    }
+
+    /// Adds `IF NOT EXISTS`.
+    pub fn if_not_exists(mut self) -> Self {
+        self.if_not_exists = true;
+        self
+    }
+
+    /// Renders and applies the statement.
+    pub async fn execute(self) -> crate::Result<()> {
+        let statement =
+            render::create_index(self.schema.dialect, &self.table, &self.def, self.if_not_exists)?;
+        self.schema.dispatch(vec![statement]).await
+    }
+}
+
+/// A `DROP INDEX` builder.
+pub struct DropIndex<'a, 'e> {
+    schema: &'a mut SchemaManager<'e>,
+    name: String,
+    if_exists: bool,
+}
+
+impl DropIndex<'_, '_> {
+    /// Adds `IF EXISTS`.
+    pub fn if_exists(mut self) -> Self {
+        self.if_exists = true;
+        self
+    }
+
+    /// Renders and applies the statement.
+    pub async fn execute(self) -> crate::Result<()> {
+        let statement = render::drop_index(self.schema.dialect, &self.name, self.if_exists);
         self.schema.dispatch(vec![statement]).await
     }
 }
