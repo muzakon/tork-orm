@@ -8,6 +8,7 @@
 resolver = "2"
 members = [
     "crates/tork-orm",
+    "crates/tork-orm-cli",
     "crates/tork-orm-core",
     "crates/tork-orm-macros",
     "examples/orm_api",
@@ -56,6 +57,11 @@ garde = { version = "0.23", features = ["derive", "email"] }
 syn = { version = "2.0.117", features = ["full", "extra-traits"] }
 quote = "1"
 proc-macro2 = "1"
+
+# CLI tool dependencies (the migration runner binary).
+tork-orm-cli = { path = "crates/tork-orm-cli", version = "0.1.0" }
+clap = { version = "4", features = ["derive", "env"] }
+uuid = { version = "1", features = ["v4"] }
 
 # Release profile: optimize for a fast, lean production binary.
 [profile.release]

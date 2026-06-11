@@ -1,0 +1,23 @@
+[package]
+name = "tork-orm-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Migration command-line runner for the Tork ORM."
+
+[[bin]]
+name = "tork-orm"
+path = "src/bin/tork-orm.rs"
+
+[dependencies]
+tork-orm = { path = "../tork-orm", default-features = false, features = ["sqlite", "migrations"] }
+tokio = { workspace = true }
+clap = { workspace = true }
+uuid = { workspace = true }
+time = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
