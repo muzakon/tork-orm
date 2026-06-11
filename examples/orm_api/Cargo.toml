@@ -1,0 +1,17 @@
+[package]
+name = "orm_api"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Example application demonstrating the Tork ORM with the Tork web framework."
+
+[dependencies]
+tork = { workspace = true }
+tork-orm = { path = "../../crates/tork-orm" }
+# garde's derive references `::garde` directly, so #[api_model] models need it in scope.
+garde = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+serde_json = { workspace = true }
