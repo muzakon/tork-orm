@@ -65,6 +65,17 @@
 pub use tork_orm_core::*;
 pub use tork_orm_macros::*;
 
+/// Database migrations: the schema builder, runner, and the `#[migration]` macro.
+///
+/// Bringing `tork_orm::migration::*` into scope pulls in everything needed to
+/// write a migration, including the `#[migration]` attribute alongside the schema
+/// types.
+#[cfg(feature = "migrations")]
+pub mod migration {
+    pub use tork_orm_core::migration::*;
+    pub use tork_orm_macros::migration;
+}
+
 /// The common imports for working with the ORM.
 ///
 /// Bringing `tork_orm::prelude::*` into scope pulls in the `Model`/`QueryResult`

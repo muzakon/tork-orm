@@ -112,4 +112,55 @@ impl Database {
             Backend::Sqlite(pool) => pool.close().await,
         }
     }
+
+    /// Pins a single connection for exclusive, sequential use.
+    ///
+    /// Used by the migration runner so a migration's statements (including
+    /// `BEGIN`/`COMMIT`) all run on the same connection.
+    #[cfg(feature = "migrations")]
+    pub(crate) async fn pinned(&self) -> crate::Result<Pinned> {
+        let backend = match &self.backend {
+            #[cfg(feature = "sqlite")]
+            Backend::Sqlite(pool) => PinnedBackend::Sqlite(pool.acquire_pinned().await?),
+        };
+        Ok(Pinned {
+            backend,
+            dialect: Arc::clone(&self.dialect),
+        })
+    }
+}
+
+/// A pinned connection exposed as an [`Executor`](crate::Executor).
+#[cfg(feature = "migrations")]
+pub(crate) struct Pinned {
+    backend: PinnedBackend,
+    dialect: Arc<dyn Dialect>,
+}
+
+/// The backend-specific pinned connection.
+#[cfg(feature = "migrations")]
+enum PinnedBackend {
+    #[cfg(feature = "sqlite")]
+    Sqlite(crate::driver::sqlite::PinnedSqlite),
+}
+
+#[cfg(feature = "migrations")]
+impl crate::executor::Executor for Pinned {
+    fn dialect(&self) -> &dyn Dialect {
+        self.dialect.as_ref()
+    }
+
+    async fn fetch_all(&self, sql: String, params: Vec<Value>) -> crate::Result<Vec<Row>> {
+        match &self.backend {
+            #[cfg(feature = "sqlite")]
+            PinnedBackend::Sqlite(pinned) => pinned.fetch_all(sql, params).await,
+        }
+    }
+
+    async fn execute(&self, sql: String, params: Vec<Value>) -> crate::Result<ExecuteResult> {
+        match &self.backend {
+            #[cfg(feature = "sqlite")]
+            PinnedBackend::Sqlite(pinned) => pinned.execute(sql, params).await,
+        }
+    }
 }

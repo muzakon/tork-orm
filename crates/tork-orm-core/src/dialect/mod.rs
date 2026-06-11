@@ -99,4 +99,19 @@ pub trait Dialect: Send + Sync + 'static {
         self.quote_identifier(identifier, &mut out);
         out
     }
+
+    /// The statement that begins a transaction.
+    fn begin_sql(&self) -> &'static str {
+        "BEGIN"
+    }
+
+    /// The statement that commits a transaction.
+    fn commit_sql(&self) -> &'static str {
+        "COMMIT"
+    }
+
+    /// The statement that rolls back a transaction.
+    fn rollback_sql(&self) -> &'static str {
+        "ROLLBACK"
+    }
 }

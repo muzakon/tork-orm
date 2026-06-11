@@ -8,6 +8,7 @@
 use proc_macro::TokenStream;
 
 mod common;
+mod migration;
 mod model;
 mod query_result;
 mod relations;
@@ -94,4 +95,27 @@ pub fn derive_query_result(item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn relations(_attr: TokenStream, item: TokenStream) -> TokenStream {
     relations::expand(item)
+}
+
+/// Implements [`MigrationTrait`] from plain migration methods.
+///
+/// Applied to an `impl` block with `fn revision()`/`fn name()` returning ids and
+/// `async fn up`/`async fn down` taking `&mut SchemaManager`, it generates the
+/// trait implementation (boxing the async bodies). An optional
+/// `fn transaction(&self) -> MigrationTransaction` is passed through.
+///
+/// # Example
+///
+/// ```ignore
+/// #[migration]
+/// impl Migration {
+///     fn revision() -> &'static str { "20260611_143000" }
+///     fn name() -> &'static str { "create_users" }
+///     async fn up(schema: &mut SchemaManager<'_>) -> Result<()> { /* ... */ Ok(()) }
+///     async fn down(schema: &mut SchemaManager<'_>) -> Result<()> { /* ... */ Ok(()) }
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn migration(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    migration::expand(item)
 }

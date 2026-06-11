@@ -14,6 +14,8 @@ use std::sync::{Arc, Mutex};
 use rusqlite::types::{ToSqlOutput, Value as SqliteValue, ValueRef};
 use rusqlite::{Connection, ToSql};
 use tokio::sync::Semaphore;
+#[cfg(feature = "migrations")]
+use tokio::sync::OwnedSemaphorePermit;
 
 use crate::driver::ExecuteResult;
 use crate::error::OrmError;
@@ -39,7 +41,7 @@ enum Source {
 struct Inner {
     source: Source,
     idle: Mutex<Vec<Connection>>,
-    semaphore: Semaphore,
+    semaphore: Arc<Semaphore>,
     statements: AtomicU64,
 }
 
@@ -98,7 +100,7 @@ impl SqlitePool {
             inner: Arc::new(Inner {
                 source,
                 idle: Mutex::new(Vec::new()),
-                semaphore: Semaphore::new(permits),
+                semaphore: Arc::new(Semaphore::new(permits)),
                 statements: AtomicU64::new(0),
             }),
         })
@@ -122,6 +124,37 @@ impl SqlitePool {
     /// adds one query per relation rather than one per row).
     pub fn statement_count(&self) -> u64 {
         self.inner.statements.load(Ordering::Relaxed)
+    }
+
+    /// Checks out a single connection and pins it for the caller's exclusive use.
+    ///
+    /// Every statement run through the returned handle uses the same connection,
+    /// so a sequence such as `BEGIN`/.../`COMMIT` is sound regardless of the pool
+    /// size. The connection returns to the pool when the handle is dropped. Used by
+    /// the migration runner to make each migration atomic.
+    #[cfg(feature = "migrations")]
+    pub(crate) async fn acquire_pinned(&self) -> crate::Result<PinnedSqlite> {
+        let permit = Arc::clone(&self.inner.semaphore)
+            .acquire_owned()
+            .await
+            .map_err(|_| OrmError::connection("connection pool is closed"))?;
+
+        let checked_out = lock(&self.inner.idle).pop();
+        let conn = match checked_out {
+            Some(conn) => conn,
+            None => {
+                let inner = Arc::clone(&self.inner);
+                tokio::task::spawn_blocking(move || inner.open())
+                    .await
+                    .map_err(|e| OrmError::connection(format!("database worker failed: {e}")))??
+            }
+        };
+
+        Ok(PinnedSqlite {
+            inner: Arc::clone(&self.inner),
+            conn: Mutex::new(Some(conn)),
+            _permit: permit,
+        })
     }
 
     /// Drops all idle connections. In-flight calls keep their connection until done.
@@ -284,4 +317,81 @@ fn execute(conn: &mut Connection, sql: &str, params: &[Value]) -> crate::Result<
         rows_affected: affected as u64,
         last_insert_rowid: conn.last_insert_rowid(),
     })
+}
+
+/// A single connection pinned out of the pool for exclusive, sequential use.
+///
+/// Returns the connection to the pool when dropped.
+#[cfg(feature = "migrations")]
+pub(crate) struct PinnedSqlite {
+    inner: Arc<Inner>,
+    conn: Mutex<Option<Connection>>,
+    _permit: OwnedSemaphorePermit,
+}
+
+#[cfg(feature = "migrations")]
+impl PinnedSqlite {
+    /// Takes the connection out for one blocking operation, then puts it back.
+    fn take_conn(&self) -> crate::Result<Connection> {
+        self.conn
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+            .ok_or_else(|| OrmError::query("pinned connection is already in use"))
+    }
+
+    /// Returns a connection after an operation completes.
+    fn put_conn(&self, conn: Connection) {
+        *self.conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(conn);
+    }
+
+    /// Runs a row-returning query on the pinned connection.
+    pub(crate) async fn fetch_all(
+        &self,
+        sql: String,
+        params: Vec<Value>,
+    ) -> crate::Result<Vec<Row>> {
+        self.inner.statements.fetch_add(1, Ordering::Relaxed);
+        let mut conn = self.take_conn()?;
+        let (conn, result) = tokio::task::spawn_blocking(move || {
+            let result = fetch_all(&mut conn, &sql, &params);
+            (conn, result)
+        })
+        .await
+        .map_err(|e| OrmError::query(format!("database worker failed: {e}")))?;
+        self.put_conn(conn);
+        result
+    }
+
+    /// Runs a non-row-returning statement on the pinned connection.
+    pub(crate) async fn execute(
+        &self,
+        sql: String,
+        params: Vec<Value>,
+    ) -> crate::Result<ExecuteResult> {
+        self.inner.statements.fetch_add(1, Ordering::Relaxed);
+        let mut conn = self.take_conn()?;
+        let (conn, result) = tokio::task::spawn_blocking(move || {
+            let result = execute(&mut conn, &sql, &params);
+            (conn, result)
+        })
+        .await
+        .map_err(|e| OrmError::query(format!("database worker failed: {e}")))?;
+        self.put_conn(conn);
+        result
+    }
+}
+
+#[cfg(feature = "migrations")]
+impl Drop for PinnedSqlite {
+    fn drop(&mut self) {
+        if let Some(conn) = self
+            .conn
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+        {
+            lock(&self.inner.idle).push(conn);
+        }
+    }
 }
