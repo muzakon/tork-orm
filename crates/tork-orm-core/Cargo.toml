@@ -13,6 +13,7 @@ tokio = { workspace = true }
 time = { workspace = true, features = ["formatting", "parsing", "macros"] }
 rusqlite = { workspace = true, optional = true }
 tork-core = { workspace = true, optional = true }
+inventory = { workspace = true, optional = true }
 
 [features]
 default = ["sqlite", "tork", "migrations"]
@@ -21,8 +22,9 @@ sqlite = ["dep:rusqlite"]
 # Reserved for future backends; each adds its own driver and dialect.
 postgres = []
 mysql = []
-# Schema migrations (the migration engine). Pure code, no extra dependency.
-migrations = []
+# Schema migrations (the migration engine) and `migrate generate`. The link-time
+# model registry that generate enumerates pulls in `inventory`.
+migrations = ["dep:inventory"]
 # Native integration with the Tork web framework (error bridge and resource
 # injection). Disable for a standalone async ORM.
 tork = ["dep:tork-core"]

@@ -110,6 +110,21 @@ pub trait Model: FromRow + Send + Sync + 'static {
             .collect()
     }
 
+    /// Returns this model's full intended schema (columns and indexes).
+    ///
+    /// The reflection `migrate generate` diffs against the live database.
+    #[cfg(feature = "migrations")]
+    fn table_schema() -> crate::registry::TableSchema
+    where
+        Self: Sized,
+    {
+        crate::registry::TableSchema {
+            table: Self::TABLE,
+            columns: Self::COLUMNS.to_vec(),
+            indexes: Self::indexes(),
+        }
+    }
+
     /// Starts a query over this model.
     ///
     /// # Examples

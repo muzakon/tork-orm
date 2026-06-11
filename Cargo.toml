@@ -47,6 +47,9 @@ tokio = { version = "1.52", features = [
 ] }
 time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
 
+# Link-time registry of models, for `migrate generate` to enumerate them.
+inventory = "0.3"
+
 # Serialization, used by examples and tests.
 serde_json = "1"
 # Temporary files/dirs for tests.

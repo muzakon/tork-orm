@@ -76,6 +76,38 @@ pub mod migration {
     pub use tork_orm_macros::migration;
 }
 
+/// Implementation details used by generated code. Not part of the public API.
+#[doc(hidden)]
+pub mod __private {
+    #[cfg(feature = "migrations")]
+    pub use inventory;
+}
+
+/// Registers a model in the link-time registry so `migrate generate` can find it.
+///
+/// `#[derive(Model)]` emits a call to this macro. With the `migrations` feature it
+/// submits a [`ModelSchemaEntry`]; without it the macro expands to nothing, so a
+/// model compiles and links the same whether or not generate is in use.
+#[cfg(feature = "migrations")]
+#[macro_export]
+macro_rules! register_model {
+    ($ty:ty) => {
+        $crate::__private::inventory::submit! {
+            $crate::ModelSchemaEntry::new(
+                <$ty as $crate::Model>::TABLE,
+                || <$ty as $crate::Model>::table_schema(),
+            )
+        }
+    };
+}
+
+/// No-op registration when migrations (and the registry) are disabled.
+#[cfg(not(feature = "migrations"))]
+#[macro_export]
+macro_rules! register_model {
+    ($ty:ty) => {};
+}
+
 /// The common imports for working with the ORM.
 ///
 /// Bringing `tork_orm::prelude::*` into scope pulls in the `Model`/`QueryResult`

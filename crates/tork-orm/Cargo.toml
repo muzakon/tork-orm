@@ -11,6 +11,7 @@ description = "A Tortoise-style async ORM for Rust with typed queries and a dial
 [dependencies]
 tork-orm-core = { workspace = true, default-features = false }
 tork-orm-macros = { workspace = true }
+inventory = { workspace = true, optional = true }
 
 [features]
 default = ["sqlite", "tork", "migrations"]
@@ -19,8 +20,9 @@ sqlite = ["tork-orm-core/sqlite"]
 # Reserved for future backends.
 postgres = ["tork-orm-core/postgres"]
 mysql = ["tork-orm-core/mysql"]
-# Schema migrations (the migration engine).
-migrations = ["tork-orm-core/migrations"]
+# Schema migrations (the migration engine) and the `migrate generate` model
+# registry. The registry enumerates models at link time via `inventory`.
+migrations = ["tork-orm-core/migrations", "dep:inventory"]
 # Native integration with the Tork web framework.
 tork = ["tork-orm-core/tork"]
 

@@ -598,6 +598,10 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
 
             #indexes_fn
         }
+
+        // Register the model so `migrate generate` can enumerate it. Expands to
+        // nothing unless the `migrations` feature is enabled.
+        #krate::register_model!(#ident);
     })
 }
 

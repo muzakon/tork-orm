@@ -18,6 +18,9 @@ pub mod preload;
 #[cfg(feature = "migrations")]
 pub mod migration;
 
+#[cfg(feature = "migrations")]
+pub mod registry;
+
 #[cfg(feature = "tork")]
 mod bridge;
 
@@ -35,6 +38,8 @@ pub use dialect::SqlType;
 pub use error::{ErrorKind, OrmError, Result};
 pub use executor::Executor;
 pub use index::{IndexColumn, IndexDef, NullsOrder};
+#[cfg(feature = "migrations")]
+pub use registry::{registered_models, ModelSchemaEntry, TableSchema};
 pub use model::{ColumnDef, ForeignKeyDef, FromRow, Model};
 pub use preload::{Preloaded, Preloader};
 pub use query::ast::{Join, OrderItem, SelectItem, SelectStatement};
