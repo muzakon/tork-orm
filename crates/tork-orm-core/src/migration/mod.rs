@@ -39,6 +39,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
+pub mod checksum;
 pub mod ddl;
 pub mod registry;
 pub mod render;
@@ -56,7 +57,7 @@ pub use ddl::{
     TableDef,
 };
 pub use registry::{boxed, MigrationSet, MigrationTrait, MigrationTransaction};
-pub use runner::Migrator;
+pub use runner::{MigrationStatus, Migrator, OnMismatch};
 pub use schema::{Column, CreateTable, DropTable, DynExecutor, ForeignKey, SchemaManager};
 
 /// The common imports for writing a migration.

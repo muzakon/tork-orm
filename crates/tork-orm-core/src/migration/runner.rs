@@ -12,14 +12,38 @@ use crate::database::Database;
 use crate::dialect::QueryWriter;
 use crate::value::Value;
 
+use super::checksum::checksum_of;
 use super::ddl::{ColumnSpec, TableDef};
-use super::registry::MigrationSet;
+use super::registry::{MigrationSet, MigrationTrait};
 use super::render;
 use super::schema::SchemaManager;
 use crate::dialect::SqlType;
 
 /// The default bookkeeping table name.
 const DEFAULT_TABLE: &str = "_tork_migrations";
+
+/// What to do when an already-applied migration's checksum no longer matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnMismatch {
+    /// Print a warning and continue (the default).
+    Warn,
+    /// Fail with an error.
+    Error,
+}
+
+/// The applied state of one migration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MigrationStatus {
+    /// The revision id.
+    pub revision: String,
+    /// The migration name.
+    pub name: String,
+    /// Whether the migration has been applied.
+    pub applied: bool,
+    /// For an applied migration, whether its stored checksum still matches what it
+    /// renders to now; `None` when not applied.
+    pub checksum_matches: Option<bool>,
+}
 
 /// Applies and reverts migrations against a database.
 ///
@@ -38,6 +62,7 @@ pub struct Migrator<'d> {
     db: &'d Database,
     set: MigrationSet,
     table: String,
+    on_mismatch: OnMismatch,
 }
 
 impl<'d> Migrator<'d> {
@@ -47,6 +72,7 @@ impl<'d> Migrator<'d> {
             db,
             set,
             table: DEFAULT_TABLE.to_string(),
+            on_mismatch: OnMismatch::Warn,
         }
     }
 
@@ -56,29 +82,95 @@ impl<'d> Migrator<'d> {
         self
     }
 
+    /// Sets how a changed-since-applied checksum is handled (default
+    /// [`OnMismatch::Warn`]).
+    pub fn on_checksum_mismatch(mut self, on_mismatch: OnMismatch) -> Self {
+        self.on_mismatch = on_mismatch;
+        self
+    }
+
     /// Applies every pending migration in revision order.
     ///
-    /// Returns the number of migrations applied.
+    /// Already-applied migrations are checked for a checksum match; a mismatch is
+    /// handled per [`on_checksum_mismatch`](Self::on_checksum_mismatch). Returns the
+    /// number of migrations applied.
     pub async fn up(&self) -> crate::Result<usize> {
         self.ensure_table().await?;
-        let applied = self.applied_revisions().await?;
+        let records = self.applied_records().await?;
         // Every migration applied in this run shares one batch number.
         let batch = self.next_batch().await?;
         let mut count = 0;
 
         for migration in self.set.sorted() {
-            if applied.iter().any(|rev| rev == migration.revision()) {
+            let checksum = self.checksum_for(migration).await?;
+            if let Some((_, stored)) = records
+                .iter()
+                .find(|(revision, _)| revision == migration.revision())
+            {
+                if stored != &checksum {
+                    self.report_mismatch(migration.revision(), stored, &checksum)?;
+                }
                 continue;
             }
             let mut schema = SchemaManager::executing(self.db);
             let start = std::time::Instant::now();
             migration.up(&mut schema).await?;
             let elapsed_ms = start.elapsed().as_millis() as i64;
-            self.record(migration.revision(), migration.name(), "", batch, elapsed_ms)
+            self.record(migration.revision(), migration.name(), &checksum, batch, elapsed_ms)
                 .await?;
             count += 1;
         }
         Ok(count)
+    }
+
+    /// Reports the applied state of every migration in the set.
+    pub async fn status(&self) -> crate::Result<Vec<MigrationStatus>> {
+        self.ensure_table().await?;
+        let records = self.applied_records().await?;
+        let mut statuses = Vec::new();
+
+        for migration in self.set.sorted() {
+            let checksum = self.checksum_for(migration).await?;
+            let checksum_matches = records
+                .iter()
+                .find(|(revision, _)| revision == migration.revision())
+                .map(|(_, stored)| stored == &checksum);
+            statuses.push(MigrationStatus {
+                revision: migration.revision().to_string(),
+                name: migration.name().to_string(),
+                applied: checksum_matches.is_some(),
+                checksum_matches,
+            });
+        }
+        Ok(statuses)
+    }
+
+    /// Computes a migration's checksum by rendering its `up` in collect mode.
+    async fn checksum_for(&self, migration: &dyn MigrationTrait) -> crate::Result<String> {
+        let dialect = self.db.dialect().as_ref();
+        let mut schema = SchemaManager::collect(dialect);
+        migration.up(&mut schema).await?;
+        Ok(checksum_of(&schema.into_collected()))
+    }
+
+    /// Handles a checksum mismatch per the configured policy.
+    fn report_mismatch(
+        &self,
+        revision: &str,
+        stored: &str,
+        computed: &str,
+    ) -> crate::Result<()> {
+        let message = format!(
+            "migration checksum mismatch: `{revision}` was applied with checksum \
+             {stored} but now renders to {computed}"
+        );
+        match self.on_mismatch {
+            OnMismatch::Error => Err(crate::OrmError::configuration(message)),
+            OnMismatch::Warn => {
+                eprintln!("tork-orm: {message}");
+                Ok(())
+            }
+        }
     }
 
     /// Reverts the most recently applied `steps` migrations.
@@ -139,17 +231,21 @@ impl<'d> Migrator<'d> {
         Ok(())
     }
 
-    /// Returns every recorded revision.
-    async fn applied_revisions(&self) -> crate::Result<Vec<String>> {
+    /// Returns every recorded `(revision, checksum)` pair.
+    async fn applied_records(&self) -> crate::Result<Vec<(String, String)>> {
         let mut writer = QueryWriter::new(self.db.dialect().as_ref());
         writer.push_sql("SELECT ");
         writer.push_identifier("revision");
+        writer.push_sql(", ");
+        writer.push_identifier("checksum");
         writer.push_sql(" FROM ");
         writer.push_identifier(&self.table);
         let (sql, params) = writer.finish();
 
         let rows = self.db.fetch_all(sql, params).await?;
-        rows.iter().map(|row| row.get::<String>("revision")).collect()
+        rows.iter()
+            .map(|row| Ok((row.get::<String>("revision")?, row.get::<String>("checksum")?)))
+            .collect()
     }
 
     /// Returns the recorded revisions most-recent first, capped at `limit`.
