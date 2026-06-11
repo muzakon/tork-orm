@@ -130,6 +130,17 @@ impl<'a> QueryWriter<'a> {
                 self.write_expr(arg);
                 self.sql.push(')');
             }
+            Expr::Func { name, args } => {
+                self.push_sql(name);
+                self.sql.push('(');
+                for (index, arg) in args.iter().enumerate() {
+                    if index != 0 {
+                        self.push_sql(", ");
+                    }
+                    self.write_expr(arg);
+                }
+                self.sql.push(')');
+            }
             Expr::CountStar => self.push_sql("COUNT(*)"),
             Expr::Alias { expr, alias } => {
                 self.write_expr(expr);

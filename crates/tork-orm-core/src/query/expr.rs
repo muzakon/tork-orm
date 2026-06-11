@@ -137,6 +137,13 @@ pub enum Expr {
         /// The aggregated expression.
         arg: Box<Expr>,
     },
+    /// A scalar function call, `name(arg, ...)`, such as `lower(email)`.
+    Func {
+        /// The function name, emitted verbatim.
+        name: String,
+        /// The call arguments, in order.
+        args: Vec<Expr>,
+    },
     /// `COUNT(*)`.
     CountStar,
     /// An aliased expression, `expr AS "alias"`.
@@ -217,6 +224,18 @@ impl Expr {
         Expr::Aggregate {
             func,
             arg: Box::new(arg),
+        }
+    }
+
+    /// Builds a scalar function call, `name(args...)`.
+    ///
+    /// The name is emitted verbatim, so it must be a valid SQL function for the
+    /// target backend. Used for functional indexes and function predicates, for
+    /// example `Expr::func("lower", [Expr::column("users", "email")])`.
+    pub fn func(name: impl Into<String>, args: impl IntoIterator<Item = Expr>) -> Self {
+        Expr::Func {
+            name: name.into(),
+            args: args.into_iter().collect(),
         }
     }
 
