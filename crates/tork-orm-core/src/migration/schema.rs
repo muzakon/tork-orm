@@ -5,8 +5,6 @@
 //! SQL without touching the database (collect mode). Collect mode is what lets a
 //! migration's DDL be previewed and hashed into a stable checksum.
 
-use std::cell::RefCell;
-
 use crate::dialect::{Dialect, DialectKind, SqlType};
 use crate::driver::ExecuteResult;
 use crate::executor::Executor;
@@ -59,12 +57,10 @@ impl<E: Executor + Sync> DynExecutor for E {
 
 /// Where a [`SchemaManager`]'s rendered DDL goes.
 enum Mode<'e> {
-    // The migration runner drives execute mode; it lands in the next commit.
     /// Run each statement against the database.
-    #[allow(dead_code)]
     Execute(&'e dyn DynExecutor),
     /// Buffer rendered statements without running them.
-    Collect(RefCell<Vec<String>>),
+    Collect(Vec<String>),
 }
 
 /// Builds and applies schema changes for one migration.
@@ -95,8 +91,6 @@ pub struct SchemaManager<'e> {
 
 impl<'e> SchemaManager<'e> {
     /// Creates a manager that runs DDL against `executor`.
-    // Used by the migration runner (next commit).
-    #[allow(dead_code)]
     pub(crate) fn executing(executor: &'e dyn DynExecutor) -> Self {
         Self {
             dialect: executor.dialect(),
@@ -107,7 +101,7 @@ impl<'e> SchemaManager<'e> {
     /// Creates a manager that buffers rendered SQL for `dialect` without running it.
     pub fn collect(dialect: &'e dyn Dialect) -> Self {
         Self {
-            mode: Mode::Collect(RefCell::new(Vec::new())),
+            mode: Mode::Collect(Vec::new()),
             dialect,
         }
     }
@@ -117,25 +111,27 @@ impl<'e> SchemaManager<'e> {
     /// Returns an empty vector for an execute-mode manager.
     pub fn into_collected(self) -> Vec<String> {
         match self.mode {
-            Mode::Collect(buffer) => buffer.into_inner(),
+            Mode::Collect(buffer) => buffer,
             Mode::Execute(_) => Vec::new(),
         }
     }
 
     /// Sends rendered statements to the database, or buffers them in collect mode.
-    async fn dispatch(&self, statements: Vec<String>) -> crate::Result<()> {
-        match &self.mode {
-            Mode::Execute(executor) => {
-                for statement in statements {
-                    executor.execute(statement, Vec::new()).await?;
-                }
-                Ok(())
-            }
+    ///
+    /// Takes `&mut self` (rather than `&self` with interior mutability) so the
+    /// future this is awaited in only needs to be `Send`, never `Sync`.
+    async fn dispatch(&mut self, statements: Vec<String>) -> crate::Result<()> {
+        let executor = match &mut self.mode {
+            Mode::Execute(executor) => *executor,
             Mode::Collect(buffer) => {
-                buffer.borrow_mut().extend(statements);
-                Ok(())
+                buffer.extend(statements);
+                return Ok(());
             }
+        };
+        for statement in statements {
+            executor.execute(statement, Vec::new()).await?;
         }
+        Ok(())
     }
 
     /// Begins a `CREATE TABLE`.

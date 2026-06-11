@@ -40,7 +40,9 @@ use std::future::Future;
 use std::pin::Pin;
 
 pub mod ddl;
+pub mod registry;
 pub mod render;
+pub mod runner;
 pub mod schema;
 
 /// A boxed, `Send` future borrowing for `'a`.
@@ -53,6 +55,8 @@ pub use ddl::{
     AlterAction, AlterTable, ColumnSpec, DefaultValue, ForeignKeyAction, ForeignKeySpec, IndexSpec,
     TableDef,
 };
+pub use registry::{boxed, MigrationSet, MigrationTrait, MigrationTransaction};
+pub use runner::Migrator;
 pub use schema::{Column, CreateTable, DropTable, DynExecutor, ForeignKey, SchemaManager};
 
 /// The common imports for writing a migration.
