@@ -4,21 +4,29 @@ use tork::api_model;
 use tork_orm::prelude::*;
 
 /// A user row.
+///
+/// `username` and `email` carry unique indexes; both are reflected into the
+/// model's index metadata (see `User::indexes`).
 #[derive(Debug, Clone, Model)]
 #[table(name = "users")]
 pub struct User {
     #[field(primary_key, auto)]
     pub id: i64,
-    #[field(varchar(length = 50))]
+    #[field(varchar(length = 50), unique)]
     pub username: String,
-    #[field(varchar(length = 255))]
+    #[field(varchar(length = 255), unique)]
     pub email: String,
     pub is_active: bool,
 }
 
 /// A post row, belonging to a user.
+///
+/// The foreign key `user_id` is indexed automatically, and a table-level compound
+/// index orders a user's posts by descending view count.
 #[derive(Debug, Clone, Model)]
-#[table(name = "posts")]
+#[table(name = "posts", indexes = [
+    index(fields = [user_id, view_count(desc)]),
+])]
 pub struct Post {
     #[field(primary_key, auto)]
     pub id: i64,
