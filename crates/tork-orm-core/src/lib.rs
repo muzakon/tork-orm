@@ -34,7 +34,7 @@ pub use database::Database;
 pub use dialect::SqlType;
 pub use error::{ErrorKind, OrmError, Result};
 pub use executor::Executor;
-pub use index::{IndexColumn, IndexDef};
+pub use index::{IndexColumn, IndexDef, NullsOrder};
 pub use model::{ColumnDef, ForeignKeyDef, FromRow, Model};
 pub use preload::{Preloaded, Preloader};
 pub use query::ast::{Join, OrderItem, SelectItem, SelectStatement};

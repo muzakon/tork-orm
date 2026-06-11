@@ -75,6 +75,42 @@ fn boolean_predicate_uses_dialect_literal() {
 }
 
 #[test]
+fn functional_index_wraps_expression() {
+    let dialect = SqliteDialect::new();
+    let mut def = index("idx_users_lower_email", Vec::new());
+    def.columns = vec![IndexColumn::expression(Expr::func(
+        "lower",
+        [Expr::column("users", "email")],
+    ))];
+    def.unique = true;
+    let sql = create_index(&dialect, "users", &def, false).unwrap();
+    assert_eq!(
+        sql,
+        "CREATE UNIQUE INDEX \"idx_users_lower_email\" ON \"users\" \
+         ((lower(\"users\".\"email\")))"
+    );
+}
+
+#[test]
+fn nulls_and_collation_render() {
+    let dialect = SqliteDialect::new();
+    let mut def = index(
+        "idx_users_name",
+        vec![
+            IndexColumn::new("score").desc().nulls_last(),
+            IndexColumn::new("name").collate("NOCASE"),
+        ],
+    );
+    def.unique = false;
+    let sql = create_index(&dialect, "users", &def, false).unwrap();
+    assert_eq!(
+        sql,
+        "CREATE INDEX \"idx_users_name\" ON \"users\" \
+         (\"score\" DESC NULLS LAST, \"name\" COLLATE NOCASE)"
+    );
+}
+
+#[test]
 fn index_method_errors_on_sqlite() {
     let dialect = SqliteDialect::new();
     let mut def = index("idx_posts_meta", vec![IndexColumn::new("metadata")]);

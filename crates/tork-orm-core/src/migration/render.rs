@@ -106,13 +106,29 @@ pub fn create_index(
         if position != 0 {
             sql.push_str(", ");
         }
-        dialect.quote_identifier(&column.name, &mut sql);
+        match &column.expression {
+            Some(expression) => {
+                sql.push('(');
+                sql.push_str(&predicate_sql(dialect, expression));
+                sql.push(')');
+            }
+            None => dialect.quote_identifier(&column.name, &mut sql),
+        }
+        if let Some(collation) = &column.collation {
+            sql.push_str(" COLLATE ");
+            sql.push_str(collation);
+        }
         if let Some(opclass) = &column.opclass {
             sql.push(' ');
             sql.push_str(opclass);
         }
         if column.descending {
             sql.push_str(" DESC");
+        }
+        match column.nulls {
+            Some(crate::index::NullsOrder::First) => sql.push_str(" NULLS FIRST"),
+            Some(crate::index::NullsOrder::Last) => sql.push_str(" NULLS LAST"),
+            None => {}
         }
     }
     sql.push(')');

@@ -8,45 +8,94 @@
 
 use crate::query::expr::Expr;
 
-/// One column of an index, with optional ordering and operator class.
+/// Where `NULL`s sort relative to other values in an index column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NullsOrder {
+    /// `NULLS FIRST`.
+    First,
+    /// `NULLS LAST`.
+    Last,
+}
+
+/// One entry of an index: either a plain column or an expression, with optional
+/// ordering, null placement, collation, and operator class.
 ///
 /// # Examples
 ///
 /// ```
 /// use tork_orm_core::IndexColumn;
 ///
-/// let column = IndexColumn::new("created_at").desc();
+/// let column = IndexColumn::new("created_at").desc().nulls_last();
 /// assert!(column.descending);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct IndexColumn {
-    /// The column name.
+    /// The column name. Empty when this entry is an expression.
     pub name: String,
-    /// Whether the column is indexed in descending order.
+    /// A functional-index expression; when set, it is indexed instead of `name`.
+    pub expression: Option<Expr>,
+    /// Whether the entry is indexed in descending order.
     pub descending: bool,
+    /// Where `NULL`s sort, if specified.
+    pub nulls: Option<NullsOrder>,
+    /// A collation to index under (e.g. `NOCASE`).
+    pub collation: Option<String>,
     /// A backend-specific operator class (e.g. `gin_trgm_ops`); Postgres-only.
     pub opclass: Option<String>,
 }
 
 impl IndexColumn {
-    /// Builds an ascending index column.
+    /// Builds an ascending index column over a named column.
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            expression: None,
             descending: false,
+            nulls: None,
+            collation: None,
             opclass: None,
         }
     }
 
-    /// Marks the column ascending (the default).
+    /// Builds a functional index entry over an expression, such as `lower(email)`.
+    pub fn expression(expression: Expr) -> Self {
+        Self {
+            name: String::new(),
+            expression: Some(expression),
+            descending: false,
+            nulls: None,
+            collation: None,
+            opclass: None,
+        }
+    }
+
+    /// Marks the entry ascending (the default).
     pub fn asc(mut self) -> Self {
         self.descending = false;
         self
     }
 
-    /// Marks the column descending.
+    /// Marks the entry descending.
     pub fn desc(mut self) -> Self {
         self.descending = true;
+        self
+    }
+
+    /// Sorts `NULL`s first.
+    pub fn nulls_first(mut self) -> Self {
+        self.nulls = Some(NullsOrder::First);
+        self
+    }
+
+    /// Sorts `NULL`s last.
+    pub fn nulls_last(mut self) -> Self {
+        self.nulls = Some(NullsOrder::Last);
+        self
+    }
+
+    /// Sets the collation to index under.
+    pub fn collate(mut self, collation: impl Into<String>) -> Self {
+        self.collation = Some(collation.into());
         self
     }
 
