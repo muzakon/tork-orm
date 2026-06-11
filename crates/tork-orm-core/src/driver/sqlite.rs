@@ -13,9 +13,7 @@ use std::sync::{Arc, Mutex};
 
 use rusqlite::types::{ToSqlOutput, Value as SqliteValue, ValueRef};
 use rusqlite::{Connection, ToSql};
-use tokio::sync::Semaphore;
-#[cfg(feature = "migrations")]
-use tokio::sync::OwnedSemaphorePermit;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::driver::ExecuteResult;
 use crate::error::OrmError;
@@ -139,8 +137,7 @@ impl SqlitePool {
     /// Every statement run through the returned handle uses the same connection,
     /// so a sequence such as `BEGIN`/.../`COMMIT` is sound regardless of the pool
     /// size. The connection returns to the pool when the handle is dropped. Used by
-    /// the migration runner to make each migration atomic.
-    #[cfg(feature = "migrations")]
+    /// the migration runner and the transaction API to pin a connection.
     pub(crate) async fn acquire_pinned(&self) -> crate::Result<PinnedSqlite> {
         let permit = Arc::clone(&self.inner.semaphore)
             .acquire_owned()
@@ -336,14 +333,12 @@ fn execute(conn: &mut Connection, sql: &str, params: &[Value]) -> crate::Result<
 /// A single connection pinned out of the pool for exclusive, sequential use.
 ///
 /// Returns the connection to the pool when dropped.
-#[cfg(feature = "migrations")]
 pub(crate) struct PinnedSqlite {
     inner: Arc<Inner>,
     conn: Mutex<Option<Connection>>,
     _permit: OwnedSemaphorePermit,
 }
 
-#[cfg(feature = "migrations")]
 impl PinnedSqlite {
     /// Takes the connection out for one blocking operation, then puts it back.
     fn take_conn(&self) -> crate::Result<Connection> {
@@ -408,9 +403,21 @@ impl PinnedSqlite {
         self.put_conn(conn);
         result
     }
+
+    /// Rolls back synchronously without `spawn_blocking`.
+    ///
+    /// Safe to call from a `Drop` impl where no async context is available. If
+    /// the connection is not currently available (the mutex is None because a
+    /// concurrent spawn_blocking holds it), the rollback is skipped — SQLite
+    /// closes any open transaction when the connection is eventually dropped.
+    pub(crate) fn rollback_now(&self) {
+        if let Ok(conn) = self.take_conn() {
+            let _ = conn.execute_batch("ROLLBACK");
+            self.put_conn(conn);
+        }
+    }
 }
 
-#[cfg(feature = "migrations")]
 impl Drop for PinnedSqlite {
     fn drop(&mut self) {
         if let Some(conn) = self

@@ -31,9 +31,11 @@ mod index;
 mod model;
 mod relation;
 mod row;
+mod transaction;
 mod value;
 
 pub use database::Database;
+pub use transaction::Transaction;
 pub use dialect::SqlType;
 pub use error::{ErrorKind, OrmError, Result};
 pub use executor::Executor;

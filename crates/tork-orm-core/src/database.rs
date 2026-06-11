@@ -123,9 +123,8 @@ impl Database {
 
     /// Pins a single connection for exclusive, sequential use.
     ///
-    /// Used by the migration runner so a migration's statements (including
-    /// `BEGIN`/`COMMIT`) all run on the same connection.
-    #[cfg(feature = "migrations")]
+    /// Used by the migration runner and the transaction API so a sequence of
+    /// statements (including `BEGIN`/`COMMIT`) all run on the same connection.
     pub(crate) async fn pinned(&self) -> crate::Result<Pinned> {
         let backend = match &self.backend {
             #[cfg(feature = "sqlite")]
@@ -139,20 +138,17 @@ impl Database {
 }
 
 /// A pinned connection exposed as an [`Executor`](crate::Executor).
-#[cfg(feature = "migrations")]
 pub(crate) struct Pinned {
     backend: PinnedBackend,
     dialect: Arc<dyn Dialect>,
 }
 
 /// The backend-specific pinned connection.
-#[cfg(feature = "migrations")]
 enum PinnedBackend {
     #[cfg(feature = "sqlite")]
     Sqlite(crate::driver::sqlite::PinnedSqlite),
 }
 
-#[cfg(feature = "migrations")]
 impl crate::executor::Executor for Pinned {
     fn dialect(&self) -> &dyn Dialect {
         self.dialect.as_ref()
@@ -173,13 +169,22 @@ impl crate::executor::Executor for Pinned {
     }
 }
 
-#[cfg(feature = "migrations")]
 impl Pinned {
     /// Runs a batch of statements on the pinned connection.
     pub(crate) async fn execute_batch(&self, sql: String) -> crate::Result<()> {
         match &self.backend {
             #[cfg(feature = "sqlite")]
             PinnedBackend::Sqlite(pinned) => pinned.execute_batch(sql).await,
+        }
+    }
+
+    /// Rolls back synchronously without spawning a task.
+    ///
+    /// Intended for `Drop` impls where no async runtime is available.
+    pub(crate) fn rollback_now(&self) {
+        match &self.backend {
+            #[cfg(feature = "sqlite")]
+            PinnedBackend::Sqlite(pinned) => pinned.rollback_now(),
         }
     }
 }

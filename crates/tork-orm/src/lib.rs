@@ -119,7 +119,7 @@ pub mod prelude {
         abs, coalesce, func, length, lower, trim, upper, Assignment, BindValue, Column, ColumnDef,
         Database, ErrorKind, Executor, Expr, ForeignKeyDef, FromRow, FromValue, IndexColumn,
         IndexDef, Model, OrderItem, OrmError, Preloaded, QuerySet, Relation, RelationKind, Result,
-        Row, SqlType, Value,
+        Row, SqlType, Transaction, Value,
     };
     // The derive and attribute macros (`Model`, `relations`).
     pub use tork_orm_macros::*;
