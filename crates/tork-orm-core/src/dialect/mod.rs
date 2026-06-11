@@ -114,4 +114,35 @@ pub trait Dialect: Send + Sync + 'static {
     fn rollback_sql(&self) -> &'static str {
         "ROLLBACK"
     }
+
+    /// Returns the literal for `value` as it appears inline in a boolean column.
+    ///
+    /// Used when rendering DDL (a partial index predicate, say), where a parameter
+    /// cannot be bound and the value has to be written into the SQL directly. The
+    /// default stores booleans as `1`/`0`, matching the integer encoding most
+    /// backends use; a backend with a native boolean overrides this.
+    fn bool_literal(&self, value: bool) -> &'static str {
+        if value {
+            "1"
+        } else {
+            "0"
+        }
+    }
+
+    /// Returns `true` if the backend supports choosing an index method (`USING`).
+    fn supports_index_method(&self) -> bool {
+        false
+    }
+
+    /// Returns `true` if the backend supports covering columns on an index
+    /// (`INCLUDE`).
+    fn supports_index_include(&self) -> bool {
+        false
+    }
+
+    /// Returns `true` if the backend supports a per-column operator class on an
+    /// index.
+    fn supports_index_opclass(&self) -> bool {
+        false
+    }
 }

@@ -80,6 +80,19 @@ pub trait Model: FromRow + Send + Sync + 'static {
     /// Returns the value of the primary key column for this instance.
     fn primary_key_value(&self) -> Value;
 
+    /// Returns the indexes declared on this model.
+    ///
+    /// The default is empty; `#[derive(Model)]` overrides it from the field-level
+    /// `index`/`unique` attributes and the table-level `#[table(indexes = [...])]`
+    /// list. This is a method rather than an associated constant because a partial
+    /// index's predicate is a runtime [`Expr`](crate::Expr).
+    fn indexes() -> Vec<crate::IndexDef>
+    where
+        Self: Sized,
+    {
+        Vec::new()
+    }
+
     /// Starts a query over this model.
     ///
     /// # Examples
