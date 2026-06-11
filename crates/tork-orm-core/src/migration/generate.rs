@@ -2,22 +2,23 @@
 //!
 //! `migrate generate` reflects each model's intended schema (its columns and
 //! indexes), reads the live database, and emits the statements that reconcile them.
-//! The scope is index-centric: it creates a wholly missing table (with its indexes)
-//! and reconciles indexes on existing tables. Column-level changes on an existing
-//! table (added, dropped, or retyped columns) are out of scope and left to a
-//! hand-written migration.
+//! For existing tables the diff covers: columns added to the model (`ADD COLUMN`),
+//! columns removed from the model (`DROP COLUMN`), and informational notes for
+//! type or nullability changes that require a table rebuild on SQLite. New tables
+//! are created in full; their indexes are emitted alongside the `CREATE TABLE`.
 //!
 //! Because the diff needs the application's Rust model types, generate is an
 //! application-embedded call, not part of the standalone migration binary.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::error::OrmError;
 use crate::executor::Executor;
 use crate::registry::{registered_models, TableSchema};
 
-use super::ddl::{ColumnSpec, ForeignKeyAction, ForeignKeySpec, TableDef};
+use super::ddl::{AlterAction, AlterTable, ColumnSpec, ForeignKeyAction, ForeignKeySpec, TableDef};
+use super::introspect::ExistingColumn;
 use super::{files, introspect, render};
 
 /// The statements that reconcile the models with the database, in both directions.
@@ -30,9 +31,16 @@ pub struct SchemaChange {
 }
 
 impl SchemaChange {
-    /// Returns `true` if there is nothing to apply.
+    /// Returns `true` if there are no executable statements to apply.
+    ///
+    /// SQL comment lines (starting with `--`) are not counted as executable,
+    /// so a diff that emits only informational notes is still considered empty
+    /// and will not produce a migration file.
     pub fn is_empty(&self) -> bool {
-        self.up.is_empty()
+        !self
+            .up
+            .iter()
+            .any(|s| !s.trim_start().starts_with("--"))
     }
 }
 
@@ -54,25 +62,126 @@ pub async fn generate<E: Executor + Sync>(
             continue;
         }
 
-        let existing = introspect::existing_indexes(executor, schema.table).await?;
-        let existing_names: HashSet<&str> = existing.iter().map(|i| i.name.as_str()).collect();
-        let model_names: HashSet<&str> = schema.indexes.iter().map(|i| i.name.as_str()).collect();
+        let existing_indexes = introspect::existing_indexes(executor, schema.table).await?;
+        let existing_index_names: HashSet<&str> =
+            existing_indexes.iter().map(|i| i.name.as_str()).collect();
+        let model_index_names: HashSet<&str> =
+            schema.indexes.iter().map(|i| i.name.as_str()).collect();
 
-        // Indexes the model declares but the database lacks.
-        for index in &schema.indexes {
-            if !existing_names.contains(index.name.as_str()) {
-                up.push(render::create_index(dialect, schema.table, index, false)?);
-                down.push(render::drop_index(dialect, &index.name, true));
-            }
-        }
-        // Indexes the database has but the model no longer declares.
-        for index in &existing {
-            if !model_names.contains(index.name.as_str()) {
+        let existing_cols = introspect::existing_columns(executor, schema.table).await?;
+        let existing_col_map: HashMap<&str, &ExistingColumn> =
+            existing_cols.iter().map(|c| (c.name.as_str(), c)).collect();
+        let model_col_names: HashSet<&str> = schema.columns.iter().map(|c| c.name).collect();
+
+        // 1. Drop stale indexes (must precede DROP COLUMN on columns they reference).
+        for index in &existing_indexes {
+            if !model_index_names.contains(index.name.as_str()) {
                 up.push(render::drop_index(dialect, &index.name, true));
                 down.push(format!(
                     "-- cannot recreate dropped index \"{}\" (its definition is unknown)",
                     index.name
                 ));
+            }
+        }
+
+        // 2. Drop columns removed from the model.
+        for col in &existing_cols {
+            if !model_col_names.contains(col.name.as_str()) {
+                if col.is_pk {
+                    up.push(format!(
+                        "-- NOTE: column \"{}\" was removed from the model but cannot be \
+                         dropped automatically (primary key); rebuild the table manually",
+                        col.name
+                    ));
+                } else {
+                    let alter = AlterTable {
+                        table: schema.table.to_string(),
+                        actions: vec![AlterAction::DropColumn(col.name.clone())],
+                    };
+                    for stmt in render::alter_table(dialect, &alter) {
+                        up.push(stmt);
+                    }
+                    down.push(restore_column_sql(dialect, schema.table, col));
+                }
+            }
+        }
+
+        // 3. Note columns whose type or nullability changed (SQLite cannot ALTER a
+        //    column in place; a table rebuild is needed).
+        for model_col in &schema.columns {
+            if let Some(existing_col) = existing_col_map.get(model_col.name) {
+                let model_type =
+                    render::column_type_str(dialect.kind(), model_col.sql_type);
+                let db_type = existing_col.declared_type.trim().to_uppercase();
+                // Skip type and nullability checks for primary key columns.
+                // SQLite always stores an auto-increment PK as INTEGER (regardless
+                // of the declared Rust type), and the NOT NULL flag is implicit in
+                // the PK constraint and therefore not reflected in `notnull`.
+                if existing_col.is_pk {
+                    continue;
+                }
+                let type_changed = model_type.to_uppercase() != db_type
+                    && !db_type.is_empty();
+                // `not_null` in the DB means `NOT NULL`; `nullable` in the model means
+                // the column accepts NULL — they're inverses.
+                let nullability_changed = model_col.nullable == existing_col.not_null;
+                if type_changed || nullability_changed {
+                    up.push(format!(
+                        "-- NOTE: column \"{}\" definition changed \
+                         (model: {} {}, database: {} {}); \
+                         rebuild the table to apply the change",
+                        model_col.name,
+                        model_type,
+                        if model_col.nullable { "nullable" } else { "not null" },
+                        existing_col.declared_type,
+                        if existing_col.not_null { "not null" } else { "nullable" },
+                    ));
+                }
+            }
+        }
+
+        // 4. Add columns new to the model.
+        for model_col in &schema.columns {
+            if !existing_col_map.contains_key(model_col.name) {
+                let mut spec = ColumnSpec::new(model_col.name, model_col.sql_type);
+                // PRIMARY KEY and AUTO_INCREMENT cannot be used in ADD COLUMN.
+                spec.primary_key = false;
+                spec.auto_increment = false;
+                if !model_col.nullable {
+                    // NOT NULL without a default fails on non-empty tables; emit
+                    // the column as nullable and let the developer fill values and
+                    // add the constraint via a separate table rebuild if needed.
+                    spec.nullable = true;
+                    up.push(format!(
+                        "-- NOTE: column \"{}\" added as nullable; NOT NULL \
+                         requires a default value for existing rows",
+                        model_col.name
+                    ));
+                } else {
+                    spec.nullable = true;
+                }
+                let alter = AlterTable {
+                    table: schema.table.to_string(),
+                    actions: vec![AlterAction::AddColumn(spec)],
+                };
+                for stmt in render::alter_table(dialect, &alter) {
+                    up.push(stmt);
+                }
+                let drop_alter = AlterTable {
+                    table: schema.table.to_string(),
+                    actions: vec![AlterAction::DropColumn(model_col.name.to_string())],
+                };
+                for stmt in render::alter_table(dialect, &drop_alter) {
+                    down.push(stmt);
+                }
+            }
+        }
+
+        // 5. Create indexes new to the model (after columns are in place).
+        for index in &schema.indexes {
+            if !existing_index_names.contains(index.name.as_str()) {
+                up.push(render::create_index(dialect, schema.table, index, false)?);
+                down.push(render::drop_index(dialect, &index.name, true));
             }
         }
     }
@@ -178,6 +287,29 @@ fn table_def_from_schema(schema: &TableSchema) -> TableDef {
     }
     def.indexes = schema.indexes.clone();
     def
+}
+
+/// Renders an `ALTER TABLE ... ADD COLUMN` that restores a dropped column.
+///
+/// The restored column is always nullable. We do not know the original default
+/// or any check constraints, so we emit the minimal form that lets the migration
+/// round-trip. Data that existed in the column before the drop is gone.
+fn restore_column_sql(
+    dialect: &dyn crate::dialect::Dialect,
+    table: &str,
+    col: &ExistingColumn,
+) -> String {
+    let mut sql = String::from("ALTER TABLE ");
+    dialect.quote_identifier(table, &mut sql);
+    sql.push_str(" ADD COLUMN ");
+    dialect.quote_identifier(&col.name, &mut sql);
+    sql.push(' ');
+    if col.declared_type.is_empty() {
+        sql.push_str("TEXT");
+    } else {
+        sql.push_str(&col.declared_type);
+    }
+    sql
 }
 
 /// Generates a fresh 12-character hex revision id.

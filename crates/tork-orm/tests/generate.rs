@@ -57,7 +57,9 @@ async fn reconciles_indexes_on_existing_table() {
 
     // Applying the up statements converges the DB to the model's indexes.
     for statement in &change.up {
-        db.execute(statement.clone(), vec![]).await.unwrap();
+        if !statement.trim_start().starts_with("--") {
+            db.execute(statement.clone(), vec![]).await.unwrap();
+        }
     }
     let names: Vec<String> = existing_indexes(&db, "widgets")
         .await
