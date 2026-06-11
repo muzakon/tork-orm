@@ -4,6 +4,30 @@
 //! the database, drives the SQL-file [`FileMigrator`](tork_orm::migration::FileMigrator),
 //! and renders concise, colored output. The same `run` entry point can be reused by
 //! the framework's CLI to provide `tork migrate ...`.
+//!
+//! Because migrations are plain `.sql` files, the binary needs no project source and
+//! no compilation — just the binary, a `migrations/` directory, and a database URL:
+//!
+//! ```text
+//! export DATABASE_URL=sqlite://app.db
+//! tork-orm migrate init                 # create the migrations directory
+//! tork-orm migrate create add_users     # scaffold a new migration
+//! tork-orm migrate up                   # apply all pending (also: up <revision>)
+//! tork-orm migrate status               # show applied / pending
+//! tork-orm migrate down                 # revert one (also: down <n> | base | <revision>)
+//! ```
+//!
+//! Each migration `.sql` carries its identity and order in headers, so files can be
+//! renamed freely:
+//!
+//! ```sql
+//! -- revision: 1975ea83b712
+//! -- down_revision: a3f9c1d4e8b2
+//! -- migrate:up
+//! CREATE TABLE "users" ("id" INTEGER PRIMARY KEY AUTOINCREMENT);
+//! -- migrate:down
+//! DROP TABLE "users";
+//! ```
 #![forbid(unsafe_code)]
 
 pub mod cli;
