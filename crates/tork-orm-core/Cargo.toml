@@ -14,6 +14,7 @@ time = { workspace = true, features = ["formatting", "parsing", "macros"] }
 rusqlite = { workspace = true, optional = true }
 tork-core = { workspace = true, optional = true }
 inventory = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
 
 [features]
 default = ["sqlite", "tork", "migrations"]
@@ -23,8 +24,9 @@ sqlite = ["dep:rusqlite"]
 postgres = []
 mysql = []
 # Schema migrations (the migration engine) and `migrate generate`. The link-time
-# model registry that generate enumerates pulls in `inventory`.
-migrations = ["dep:inventory"]
+# model registry that generate enumerates pulls in `inventory`; generated
+# migration files get revision ids from `uuid`.
+migrations = ["dep:inventory", "dep:uuid"]
 # Native integration with the Tork web framework (error bridge and resource
 # injection). Disable for a standalone async ORM.
 tork = ["dep:tork-core"]

@@ -30,3 +30,4 @@ tork = ["tork-orm-core/tork"]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tork = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }

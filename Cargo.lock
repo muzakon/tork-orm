@@ -1548,6 +1548,7 @@ version = "0.1.0"
 dependencies = [
  "inventory",
  "serde_json",
+ "tempfile",
  "tokio",
  "tork",
  "tork-orm-core",
@@ -1575,6 +1576,7 @@ dependencies = [
  "time",
  "tokio",
  "tork-core",
+ "uuid",
 ]
 
 [[package]]
