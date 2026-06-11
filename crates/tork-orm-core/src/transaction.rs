@@ -52,6 +52,31 @@ use crate::row::Row;
 use crate::value::Value;
 use crate::BoxFuture;
 
+/// The locking behaviour requested when starting a transaction.
+///
+/// These correspond to SQLite's `BEGIN` variants. Future backends may map them
+/// to their own isolation constructs or ignore levels they do not support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IsolationLevel {
+    /// Acquire no locks until the first read or write (SQLite default).
+    ///
+    /// A shared lock is taken on the first read; an exclusive lock on the first
+    /// write. Other readers can proceed concurrently until a write begins.
+    #[default]
+    Deferred,
+    /// Acquire a reserved write lock immediately, before any statement runs.
+    ///
+    /// Readers can still proceed concurrently, but no other writer can start.
+    /// Use this when you know the transaction will write, to avoid retrying on
+    /// `SQLITE_BUSY` at write time.
+    Immediate,
+    /// Acquire an exclusive lock immediately, blocking all other access.
+    ///
+    /// No other connection can read or write until this transaction ends. Use
+    /// sparingly; it prevents all concurrent access to the database.
+    Exclusive,
+}
+
 /// An open database transaction.
 ///
 /// Wraps a pinned connection with an active `BEGIN`. Implements [`Executor`] so
@@ -270,5 +295,97 @@ impl Database {
         let begin_sql = pinned.dialect().begin_sql().to_string();
         pinned.execute(begin_sql, vec![]).await?;
         Ok(Transaction::new(pinned))
+    }
+
+    /// Returns a [`TransactionBuilder`] for opening a transaction with a
+    /// specific isolation level.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use tork_orm_core::{Database, Executor};
+    ///
+    /// # async fn run() -> tork_orm_core::Result<()> {
+    /// let db = Database::connect("sqlite::memory:", 1).await?;
+    /// db.execute("CREATE TABLE t (x INTEGER)".into(), vec![]).await?;
+    /// db.transaction_with()
+    ///     .immediate()
+    ///     .run(|tx| Box::pin(async move {
+    ///         tx.execute("INSERT INTO t VALUES (1)".into(), vec![]).await?;
+    ///         Ok(())
+    ///     }))
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn transaction_with(&self) -> TransactionBuilder<'_> {
+        TransactionBuilder { db: self, level: IsolationLevel::Deferred }
+    }
+}
+
+/// Builds a transaction with a specific isolation level.
+///
+/// Created by [`Database::transaction_with`].
+pub struct TransactionBuilder<'db> {
+    db: &'db Database,
+    level: IsolationLevel,
+}
+
+impl<'db> TransactionBuilder<'db> {
+    /// Uses `BEGIN DEFERRED` (the default).
+    pub fn deferred(mut self) -> Self {
+        self.level = IsolationLevel::Deferred;
+        self
+    }
+
+    /// Uses `BEGIN IMMEDIATE`, acquiring a write lock before any statement runs.
+    pub fn immediate(mut self) -> Self {
+        self.level = IsolationLevel::Immediate;
+        self
+    }
+
+    /// Uses `BEGIN EXCLUSIVE`, blocking all other database access.
+    pub fn exclusive(mut self) -> Self {
+        self.level = IsolationLevel::Exclusive;
+        self
+    }
+
+    /// Opens the transaction with the configured isolation level.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no connection is available or the `BEGIN` statement
+    /// fails (for example, `BEGIN EXCLUSIVE` when another connection holds a
+    /// lock and the busy timeout expires).
+    pub async fn begin(self) -> crate::Result<Transaction> {
+        let pinned = self.db.pinned().await?;
+        let sql = pinned.dialect().begin_with_sql(self.level);
+        pinned.execute(sql, vec![]).await?;
+        Ok(Transaction::new(pinned))
+    }
+
+    /// Runs `f` inside a transaction opened with the configured isolation level,
+    /// committing on `Ok` and rolling back on `Err`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the `BEGIN` statement fails, if `f` returns an error,
+    /// or if `COMMIT` fails.
+    pub async fn run<F, R>(self, f: F) -> crate::Result<R>
+    where
+        F: for<'a> FnOnce(&'a Transaction) -> BoxFuture<'a, crate::Result<R>>,
+        R: Send + 'static,
+    {
+        let mut tx = self.begin().await?;
+        match f(&tx).await {
+            Ok(value) => {
+                tx.commit().await?;
+                Ok(value)
+            }
+            Err(error) => {
+                let _ = tx.rollback().await;
+                Err(error)
+            }
+        }
     }
 }

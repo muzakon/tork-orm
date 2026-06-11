@@ -105,6 +105,15 @@ pub trait Dialect: Send + Sync + 'static {
         "BEGIN"
     }
 
+    /// The statement that begins a transaction with the given isolation level.
+    ///
+    /// Most backends map this to `BEGIN` (ignoring the level) unless they have a
+    /// matching SQL form. SQLite overrides this to support `BEGIN DEFERRED`,
+    /// `BEGIN IMMEDIATE`, and `BEGIN EXCLUSIVE`.
+    fn begin_with_sql(&self, _level: crate::transaction::IsolationLevel) -> String {
+        "BEGIN".to_string()
+    }
+
     /// The statement that commits a transaction.
     fn commit_sql(&self) -> &'static str {
         "COMMIT"

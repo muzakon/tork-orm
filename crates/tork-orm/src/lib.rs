@@ -145,8 +145,8 @@ pub mod prelude {
     pub use crate::{
         abs, coalesce, func, length, lower, trim, upper, Assignment, BindValue, BoxFuture, Column,
         ColumnDef, Database, ErrorKind, Executor, Expr, ForeignKeyDef, FromRow, FromValue,
-        IndexColumn, IndexDef, Model, OrderItem, OrmError, Preloaded, QuerySet, Relation,
-        RelationKind, Result, Row, SqlType, Transaction, Value,
+        IndexColumn, IndexDef, IsolationLevel, Model, OrderItem, OrmError, Preloaded, QuerySet,
+        Relation, RelationKind, Result, Row, SqlType, Transaction, TransactionBuilder, Value,
     };
     // The derive and attribute macros (`Model`, `relations`).
     pub use tork_orm_macros::*;

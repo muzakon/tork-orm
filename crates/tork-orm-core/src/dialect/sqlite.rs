@@ -1,6 +1,7 @@
 //! The SQLite dialect.
 
 use super::{Dialect, DialectKind, SqlType};
+use crate::transaction::IsolationLevel;
 
 /// SQL generation for SQLite.
 ///
@@ -64,6 +65,14 @@ impl Dialect for SqliteDialect {
             SqlType::Real => "REAL",
             SqlType::Text | SqlType::Varchar(_) | SqlType::Timestamp => "TEXT",
             SqlType::Blob => "BLOB",
+        }
+    }
+
+    fn begin_with_sql(&self, level: IsolationLevel) -> String {
+        match level {
+            IsolationLevel::Deferred => "BEGIN DEFERRED".to_string(),
+            IsolationLevel::Immediate => "BEGIN IMMEDIATE".to_string(),
+            IsolationLevel::Exclusive => "BEGIN EXCLUSIVE".to_string(),
         }
     }
 }
