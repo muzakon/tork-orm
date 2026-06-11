@@ -4,13 +4,17 @@
 //! [`FromRow`] implementation that reads each field from its like-named column,
 //! and the insert/primary-key value accessors the query layer uses.
 
+use std::collections::HashSet;
+
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
+use syn::visit_mut::VisitMut;
 use syn::{
-    Data, DeriveInput, Fields, Ident, LitInt, LitStr, Path, PathSegment, Token, parse_macro_input,
+    Data, DeriveInput, Expr, Fields, Ident, LitInt, LitStr, Path, PathSegment, Token,
+    parse_macro_input,
 };
 
 use crate::common::{krate, option_inner, sql_type_for, to_snake};
@@ -19,6 +23,25 @@ use crate::common::{krate, option_inner, sql_type_for, to_snake};
 #[derive(Default)]
 struct TableArgs {
     name: Option<LitStr>,
+    indexes: Vec<TableIndex>,
+}
+
+/// One entry of `#[table(indexes = [...])]`.
+struct TableIndex {
+    unique: bool,
+    name: Option<LitStr>,
+    fields: Vec<IndexFieldEntry>,
+    predicate: Option<Expr>,
+    method: Option<LitStr>,
+    include: Vec<Ident>,
+}
+
+/// One column reference inside an index's `fields = [...]` list, with its optional
+/// ordering and operator class.
+struct IndexFieldEntry {
+    ident: Ident,
+    descending: bool,
+    opclass: Option<LitStr>,
 }
 
 impl Parse for TableArgs {
@@ -30,6 +53,14 @@ impl Parse for TableArgs {
                 "name" => {
                     input.parse::<Token![=]>()?;
                     args.name = Some(input.parse()?);
+                }
+                "indexes" => {
+                    input.parse::<Token![=]>()?;
+                    let content;
+                    syn::bracketed!(content in input);
+                    let entries: Punctuated<TableIndex, Token![,]> =
+                        content.parse_terminated(TableIndex::parse, Token![,])?;
+                    args.indexes = entries.into_iter().collect();
                 }
                 other => {
                     return Err(syn::Error::new(
@@ -44,6 +75,156 @@ impl Parse for TableArgs {
             input.parse::<Token![,]>()?;
         }
         Ok(args)
+    }
+}
+
+impl Parse for TableIndex {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let kind: Ident = input.parse()?;
+        let unique = match kind.to_string().as_str() {
+            "index" => false,
+            "unique" => true,
+            other => {
+                return Err(syn::Error::new(
+                    kind.span(),
+                    format!("expected `index` or `unique`, found `{other}`"),
+                ));
+            }
+        };
+
+        let content;
+        syn::parenthesized!(content in input);
+
+        let mut index = TableIndex {
+            unique,
+            name: None,
+            fields: Vec::new(),
+            predicate: None,
+            method: None,
+            include: Vec::new(),
+        };
+
+        while !content.is_empty() {
+            // `where` is a keyword, so it cannot be parsed as an identifier.
+            if content.peek(Token![where]) {
+                content.parse::<Token![where]>()?;
+                content.parse::<Token![=]>()?;
+                index.predicate = Some(content.parse()?);
+            } else {
+                let key: Ident = content.parse()?;
+                match key.to_string().as_str() {
+                    "name" => {
+                        content.parse::<Token![=]>()?;
+                        index.name = Some(content.parse()?);
+                    }
+                    "fields" => {
+                        content.parse::<Token![=]>()?;
+                        let inner;
+                        syn::bracketed!(inner in content);
+                        let entries: Punctuated<IndexFieldEntry, Token![,]> =
+                            inner.parse_terminated(IndexFieldEntry::parse, Token![,])?;
+                        index.fields = entries.into_iter().collect();
+                    }
+                    "using" => {
+                        content.parse::<Token![=]>()?;
+                        index.method = Some(content.parse()?);
+                    }
+                    "include" => {
+                        content.parse::<Token![=]>()?;
+                        let inner;
+                        syn::bracketed!(inner in content);
+                        let entries: Punctuated<Ident, Token![,]> =
+                            inner.parse_terminated(Ident::parse, Token![,])?;
+                        index.include = entries.into_iter().collect();
+                    }
+                    "expr" => {
+                        return Err(syn::Error::new(
+                            key.span(),
+                            "expression indexes are not supported yet",
+                        ));
+                    }
+                    other => {
+                        return Err(syn::Error::new(
+                            key.span(),
+                            format!("unknown index option `{other}`"),
+                        ));
+                    }
+                }
+            }
+            if content.is_empty() {
+                break;
+            }
+            content.parse::<Token![,]>()?;
+        }
+
+        if index.fields.is_empty() {
+            return Err(syn::Error::new(
+                kind.span(),
+                "an index requires a non-empty `fields = [...]`",
+            ));
+        }
+        Ok(index)
+    }
+}
+
+impl Parse for IndexFieldEntry {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let ident: Ident = input.parse()?;
+        let mut entry = IndexFieldEntry {
+            ident,
+            descending: false,
+            opclass: None,
+        };
+        if input.peek(syn::token::Paren) {
+            let inner;
+            syn::parenthesized!(inner in input);
+            while !inner.is_empty() {
+                let modifier: Ident = inner.parse()?;
+                match modifier.to_string().as_str() {
+                    "asc" => entry.descending = false,
+                    "desc" => entry.descending = true,
+                    "opclass" => {
+                        inner.parse::<Token![=]>()?;
+                        entry.opclass = Some(inner.parse()?);
+                    }
+                    other => {
+                        return Err(syn::Error::new(
+                            modifier.span(),
+                            format!("unknown column modifier `{other}`"),
+                        ));
+                    }
+                }
+                if inner.is_empty() {
+                    break;
+                }
+                inner.parse::<Token![,]>()?;
+            }
+        }
+        Ok(entry)
+    }
+}
+
+/// Rewrites bare field identifiers in an index predicate into `Self::<ident>` so
+/// they resolve to the generated `Column` constants. For example `status.eq(x)`
+/// becomes `Self::status.eq(x)`. Anything that is not a single-segment path
+/// matching a field name is left untouched.
+struct FieldPathRewriter {
+    fields: HashSet<String>,
+}
+
+impl VisitMut for FieldPathRewriter {
+    fn visit_expr_path_mut(&mut self, node: &mut syn::ExprPath) {
+        if node.qself.is_none()
+            && node.path.leading_colon.is_none()
+            && node.path.segments.len() == 1
+        {
+            let segment = &node.path.segments[0];
+            if segment.arguments.is_empty() && self.fields.contains(&segment.ident.to_string()) {
+                let ident = segment.ident.clone();
+                node.path = syn::parse_quote!(Self::#ident);
+            }
+        }
+        syn::visit_mut::visit_expr_path_mut(self, node);
     }
 }
 
@@ -170,6 +351,20 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // Indexes built from the field-level attributes (`unique`/`index`) plus the
     // automatic index on each foreign key.
     let mut index_defs: Vec<TokenStream2> = Vec::new();
+    // Maps a field identifier to its database column name (for table-level indexes
+    // that reference fields by name) and collects the field names (for rewriting
+    // partial-index predicates).
+    let mut field_columns: Vec<(String, String)> = Vec::new();
+    let mut field_names: HashSet<String> = HashSet::new();
+
+    // A foreign key's automatic index is suppressed when a table-level index already
+    // leads with that column, so collect those leading field names up front.
+    let table_index_first_idents: HashSet<String> = table_args
+        .indexes
+        .iter()
+        .filter_map(|index| index.fields.first())
+        .map(|entry| entry.ident.to_string())
+        .collect();
 
     for field in &named.named {
         let field_ident = field.ident.as_ref().expect("named field");
@@ -186,6 +381,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             .column
             .clone()
             .unwrap_or_else(|| field_ident.to_string());
+        field_columns.push((field_ident.to_string(), column_name.clone()));
+        field_names.insert(field_ident.to_string());
 
         let nullable = option_inner(field_ty).is_some();
         let base_ty = option_inner(field_ty).unwrap_or(field_ty);
@@ -222,7 +419,11 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         } else {
             false
         };
-        if args.foreign_key.is_some() && !field_indexed && args.index != Some(false) {
+        if args.foreign_key.is_some()
+            && !field_indexed
+            && args.index != Some(false)
+            && !table_index_first_idents.contains(&field_ident.to_string())
+        {
             index_defs.push(field_index_tokens(&krate, &table_name, &column_name, false));
         }
 
@@ -270,6 +471,18 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             "#[derive(Model)] requires one field marked `#[field(primary_key)]`",
         ));
     };
+
+    // Table-level indexes from `#[table(indexes = [...])]`, appended after the
+    // field-derived ones.
+    for index in &table_args.indexes {
+        index_defs.push(table_index_tokens(
+            &krate,
+            &table_name,
+            index,
+            &field_columns,
+            &field_names,
+        )?);
+    }
 
     // Only override `Model::indexes` when the model actually declares some; an
     // empty list is identical to the trait default.
@@ -333,6 +546,84 @@ fn field_index_tokens(
         __index.unique = #unique;
         __index
     })
+}
+
+/// Builds the tokens for a table-level [`IndexDef`], resolving each referenced
+/// field to its column name and lowering a partial-index predicate.
+fn table_index_tokens(
+    krate: &TokenStream2,
+    table: &str,
+    index: &TableIndex,
+    field_columns: &[(String, String)],
+    field_names: &HashSet<String>,
+) -> syn::Result<TokenStream2> {
+    let lookup = |ident: &Ident| -> syn::Result<String> {
+        field_columns
+            .iter()
+            .find(|(name, _)| name == &ident.to_string())
+            .map(|(_, column)| column.clone())
+            .ok_or_else(|| {
+                syn::Error::new(ident.span(), format!("unknown field `{ident}` in index"))
+            })
+    };
+
+    let mut column_names: Vec<String> = Vec::new();
+    let mut column_tokens: Vec<TokenStream2> = Vec::new();
+    for entry in &index.fields {
+        let column = lookup(&entry.ident)?;
+        column_names.push(column.clone());
+        let mut tokens = quote!(#krate::IndexColumn::new(#column));
+        if entry.descending {
+            tokens = quote!(#tokens.desc());
+        }
+        if let Some(opclass) = &entry.opclass {
+            tokens = quote!(#tokens.opclass(#opclass));
+        }
+        column_tokens.push(tokens);
+    }
+
+    let name = match &index.name {
+        Some(lit) => lit.value(),
+        None => auto_index_name(table, &column_names, index.unique),
+    };
+    let unique = index.unique;
+
+    let predicate_assign = match &index.predicate {
+        Some(expr) => {
+            let mut rewritten = expr.clone();
+            let mut rewriter = FieldPathRewriter {
+                fields: field_names.clone(),
+            };
+            rewriter.visit_expr_mut(&mut rewritten);
+            quote!(__index.predicate = ::core::option::Option::Some(#rewritten);)
+        }
+        None => quote!(),
+    };
+
+    let method_assign = match &index.method {
+        Some(lit) => quote!(__index.method = ::core::option::Option::Some(#lit.to_string());),
+        None => quote!(),
+    };
+
+    let mut include_columns: Vec<String> = Vec::new();
+    for ident in &index.include {
+        include_columns.push(lookup(ident)?);
+    }
+    let include_assign = if include_columns.is_empty() {
+        quote!()
+    } else {
+        quote!(__index.include = ::std::vec![ #(#include_columns.to_string()),* ];)
+    };
+
+    Ok(quote!({
+        let mut __index = #krate::IndexDef::new(#name);
+        __index.columns = ::std::vec![ #(#column_tokens),* ];
+        __index.unique = #unique;
+        #predicate_assign
+        #method_assign
+        #include_assign
+        __index
+    }))
 }
 
 /// Auto-names an index from its table and column names: `<table>_<col...>_idx`,
