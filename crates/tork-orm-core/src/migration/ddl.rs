@@ -6,6 +6,7 @@
 //! dialect. Like the query AST, the DDL AST is independent of any one backend.
 
 use crate::dialect::SqlType;
+use crate::index::IndexDef;
 
 /// The action a foreign key takes when the referenced row changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,23 +142,8 @@ pub struct ForeignKeySpec {
     pub on_update: ForeignKeyAction,
 }
 
-/// An index definition.
-#[derive(Debug, Clone, PartialEq)]
-pub struct IndexSpec {
-    /// The index name.
-    pub name: String,
-    /// The table the index is on.
-    pub table: String,
-    /// The indexed columns.
-    pub columns: Vec<String>,
-    /// Whether the index is unique.
-    pub unique: bool,
-    /// Whether to use `IF NOT EXISTS`.
-    pub if_not_exists: bool,
-}
-
 /// A `CREATE TABLE` definition.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct TableDef {
     /// The table name.
     pub name: String,
@@ -170,7 +156,7 @@ pub struct TableDef {
     /// Foreign key constraints.
     pub foreign_keys: Vec<ForeignKeySpec>,
     /// Indexes created alongside the table.
-    pub indexes: Vec<IndexSpec>,
+    pub indexes: Vec<IndexDef>,
 }
 
 impl TableDef {

@@ -55,7 +55,7 @@ pub(crate) fn table_def(table: &str) -> TableDef {
 
 /// Creates the bookkeeping table if it does not already exist.
 pub(crate) async fn ensure_table<E: Executor + Sync>(executor: &E, table: &str) -> crate::Result<()> {
-    for statement in render::create_table(executor.dialect(), &table_def(table)) {
+    for statement in render::create_table(executor.dialect(), &table_def(table))? {
         executor.execute(statement, Vec::new()).await?;
     }
     Ok(())

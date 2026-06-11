@@ -15,8 +15,8 @@ pub mod sqlite;
 pub use sqlite::SqliteDialect;
 
 pub use writer::{
-    QueryWriter, render_count, render_delete, render_exists, render_expr, render_insert,
-    render_select, render_update,
+    QueryWriter, predicate_sql, quote_string_literal, render_count, render_delete, render_exists,
+    render_expr, render_insert, render_select, render_update,
 };
 
 /// Identifies a database backend.

@@ -211,7 +211,7 @@ impl CreateTable<'_, '_> {
 
     /// Renders and applies the statement.
     pub async fn execute(self) -> crate::Result<()> {
-        let statements = render::create_table(self.schema.dialect, &self.def);
+        let statements = render::create_table(self.schema.dialect, &self.def)?;
         self.schema.dispatch(statements).await
     }
 }

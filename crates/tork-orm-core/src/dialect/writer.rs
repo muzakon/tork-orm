@@ -16,6 +16,7 @@ pub struct QueryWriter<'a> {
     dialect: &'a dyn Dialect,
     sql: String,
     params: Vec<Value>,
+    inline_values: bool,
 }
 
 impl<'a> QueryWriter<'a> {
@@ -25,6 +26,22 @@ impl<'a> QueryWriter<'a> {
             dialect,
             sql: String::new(),
             params: Vec::new(),
+            inline_values: false,
+        }
+    }
+
+    /// Creates a writer that renders values inline as SQL literals instead of as
+    /// bound placeholders.
+    ///
+    /// DDL cannot bind parameters, so a partial-index predicate has to embed its
+    /// values directly. A writer in this mode leaves [`QueryWriter::finish`]'s
+    /// parameter list empty.
+    pub fn new_inline(dialect: &'a dyn Dialect) -> Self {
+        Self {
+            dialect,
+            sql: String::new(),
+            params: Vec::new(),
+            inline_values: true,
         }
     }
 
@@ -46,10 +63,42 @@ impl<'a> QueryWriter<'a> {
     }
 
     /// Appends a placeholder and records its bound value.
+    ///
+    /// In inline mode the value is written directly as a SQL literal and the
+    /// parameter list is left untouched.
     pub fn push_bind(&mut self, value: Value) {
+        if self.inline_values {
+            self.write_value_literal(&value);
+            return;
+        }
         let index = self.params.len();
         self.dialect.placeholder(index, &mut self.sql);
         self.params.push(value);
+    }
+
+    /// Writes a value as an inline SQL literal.
+    fn write_value_literal(&mut self, value: &Value) {
+        match value {
+            Value::Null => self.sql.push_str("NULL"),
+            Value::Bool(flag) => self.sql.push_str(self.dialect.bool_literal(*flag)),
+            Value::Int(number) => self.sql.push_str(&number.to_string()),
+            Value::Real(number) => self.sql.push_str(&number.to_string()),
+            Value::Text(text) => quote_string_literal(text, &mut self.sql),
+            Value::Timestamp(ts) => {
+                let text = ts
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap_or_default();
+                quote_string_literal(&text, &mut self.sql);
+            }
+            Value::Blob(bytes) => {
+                self.sql.push_str("X'");
+                for byte in bytes {
+                    use std::fmt::Write;
+                    let _ = write!(self.sql, "{byte:02x}");
+                }
+                self.sql.push('\'');
+            }
+        }
     }
 
     /// Renders a boolean expression.
@@ -343,4 +392,26 @@ pub fn render_expr(dialect: &dyn Dialect, expr: &Expr) -> (String, Vec<Value>) {
     let mut writer = QueryWriter::new(dialect);
     writer.write_expr(expr);
     writer.finish()
+}
+
+/// Renders a boolean expression with its values inlined as SQL literals.
+///
+/// Used where parameters cannot be bound — notably a partial index's `WHERE`
+/// clause in DDL. The returned string is self-contained; there are no parameters.
+pub fn predicate_sql(dialect: &dyn Dialect, expr: &Expr) -> String {
+    let mut writer = QueryWriter::new_inline(dialect);
+    writer.write_expr(expr);
+    writer.finish().0
+}
+
+/// Writes a single-quoted SQL string literal, doubling embedded quotes.
+pub fn quote_string_literal(value: &str, out: &mut String) {
+    out.push('\'');
+    for ch in value.chars() {
+        if ch == '\'' {
+            out.push('\'');
+        }
+        out.push(ch);
+    }
+    out.push('\'');
 }

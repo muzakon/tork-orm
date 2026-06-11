@@ -93,6 +93,23 @@ pub trait Model: FromRow + Send + Sync + 'static {
         Vec::new()
     }
 
+    /// Renders every index on this model to its `CREATE INDEX` statement.
+    ///
+    /// This is the reflection helper a future schema-diffing tool builds on; it is
+    /// also handy in tests. Each index is rendered for `dialect`, so an unsupported
+    /// feature (such as an index method on a backend that lacks one) surfaces as an
+    /// error here.
+    #[cfg(feature = "migrations")]
+    fn index_statements(dialect: &dyn crate::dialect::Dialect) -> crate::Result<Vec<String>>
+    where
+        Self: Sized,
+    {
+        Self::indexes()
+            .iter()
+            .map(|index| crate::migration::render::create_index(dialect, Self::TABLE, index, false))
+            .collect()
+    }
+
     /// Starts a query over this model.
     ///
     /// # Examples

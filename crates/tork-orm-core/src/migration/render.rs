@@ -7,15 +7,18 @@
 //! the input AST and the dialect — which is what lets a migration's rendered DDL be
 //! hashed into a stable checksum.
 
-use crate::dialect::{Dialect, DialectKind, SqlType};
+use crate::dialect::{Dialect, DialectKind, SqlType, predicate_sql, quote_string_literal};
+use crate::index::IndexDef;
+use crate::error::OrmError;
 
-use super::ddl::{
-    AlterAction, AlterTable, ColumnSpec, DefaultValue, ForeignKeySpec, IndexSpec, TableDef,
-};
+use super::ddl::{AlterAction, AlterTable, ColumnSpec, DefaultValue, ForeignKeySpec, TableDef};
 
 /// Renders a `CREATE TABLE`, returning the table statement followed by any index
 /// statements declared alongside it.
-pub fn create_table(dialect: &dyn Dialect, table: &TableDef) -> Vec<String> {
+///
+/// Returns an error if a declared index uses a feature the dialect does not
+/// support (such as an index method on a backend that lacks one).
+pub fn create_table(dialect: &dyn Dialect, table: &TableDef) -> crate::Result<Vec<String>> {
     let mut statements = Vec::new();
     let mut sql = String::from("CREATE TABLE ");
     if table.if_not_exists {
@@ -53,9 +56,9 @@ pub fn create_table(dialect: &dyn Dialect, table: &TableDef) -> Vec<String> {
     statements.push(sql);
 
     for index in &table.indexes {
-        statements.push(create_index(dialect, index));
+        statements.push(create_index(dialect, &table.name, index, table.if_not_exists)?);
     }
-    statements
+    Ok(statements)
 }
 
 /// Renders a `DROP TABLE`.
@@ -68,23 +71,86 @@ pub fn drop_table(dialect: &dyn Dialect, name: &str, if_exists: bool) -> String 
     sql
 }
 
-/// Renders a `CREATE INDEX`.
-pub fn create_index(dialect: &dyn Dialect, index: &IndexSpec) -> String {
+/// Renders a `CREATE INDEX` for an index on `table`.
+///
+/// Covers per-column ordering and operator class, partial `WHERE` predicates
+/// (rendered with inline literals, since DDL cannot bind parameters), index method
+/// (`USING`), and covering columns (`INCLUDE`). The Postgres-only features are
+/// validated against the dialect's capabilities and produce an error rather than
+/// being silently dropped.
+pub fn create_index(
+    dialect: &dyn Dialect,
+    table: &str,
+    index: &IndexDef,
+    if_not_exists: bool,
+) -> crate::Result<String> {
+    validate_index(dialect, index)?;
+
     let mut sql = String::from("CREATE ");
     if index.unique {
         sql.push_str("UNIQUE ");
     }
     sql.push_str("INDEX ");
-    if index.if_not_exists {
+    if if_not_exists {
         sql.push_str("IF NOT EXISTS ");
     }
     dialect.quote_identifier(&index.name, &mut sql);
     sql.push_str(" ON ");
-    dialect.quote_identifier(&index.table, &mut sql);
+    dialect.quote_identifier(table, &mut sql);
+    if let Some(method) = &index.method {
+        sql.push_str(" USING ");
+        sql.push_str(method);
+    }
     sql.push_str(" (");
-    render_identifier_list(dialect, &index.columns, &mut sql);
+    for (position, column) in index.columns.iter().enumerate() {
+        if position != 0 {
+            sql.push_str(", ");
+        }
+        dialect.quote_identifier(&column.name, &mut sql);
+        if let Some(opclass) = &column.opclass {
+            sql.push(' ');
+            sql.push_str(opclass);
+        }
+        if column.descending {
+            sql.push_str(" DESC");
+        }
+    }
     sql.push(')');
-    sql
+    if !index.include.is_empty() {
+        sql.push_str(" INCLUDE (");
+        render_identifier_list(dialect, &index.include, &mut sql);
+        sql.push(')');
+    }
+    if let Some(predicate) = &index.predicate {
+        sql.push_str(" WHERE ");
+        sql.push_str(&predicate_sql(dialect, predicate));
+    }
+    Ok(sql)
+}
+
+/// Rejects an index whose features the dialect does not support.
+fn validate_index(dialect: &dyn Dialect, index: &IndexDef) -> crate::Result<()> {
+    if let Some(method) = &index.method {
+        if !dialect.supports_index_method() {
+            return Err(OrmError::configuration(format!(
+                "{} does not support index method `{method}`",
+                dialect.name()
+            )));
+        }
+    }
+    if !index.include.is_empty() && !dialect.supports_index_include() {
+        return Err(OrmError::configuration(format!(
+            "{} does not support covering index columns (INCLUDE)",
+            dialect.name()
+        )));
+    }
+    if index.columns.iter().any(|c| c.opclass.is_some()) && !dialect.supports_index_opclass() {
+        return Err(OrmError::configuration(format!(
+            "{} does not support index operator classes",
+            dialect.name()
+        )));
+    }
+    Ok(())
 }
 
 /// Renders a `DROP INDEX`.
@@ -256,16 +322,4 @@ fn render_identifier_list(dialect: &dyn Dialect, names: &[String], out: &mut Str
         }
         dialect.quote_identifier(name, out);
     }
-}
-
-/// Writes a single-quoted SQL string literal, doubling embedded quotes.
-pub fn quote_string_literal(value: &str, out: &mut String) {
-    out.push('\'');
-    for ch in value.chars() {
-        if ch == '\'' {
-            out.push('\'');
-        }
-        out.push(ch);
-    }
-    out.push('\'');
 }

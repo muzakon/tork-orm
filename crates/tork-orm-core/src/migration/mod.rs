@@ -56,9 +56,9 @@ mod store;
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 pub use ddl::{
-    AlterAction, AlterTable, ColumnSpec, DefaultValue, ForeignKeyAction, ForeignKeySpec, IndexSpec,
-    TableDef,
+    AlterAction, AlterTable, ColumnSpec, DefaultValue, ForeignKeyAction, ForeignKeySpec, TableDef,
 };
+pub use crate::index::{IndexColumn, IndexDef};
 pub use files::{head_revision, Applied, FileMigrator, FileStatus};
 pub use registry::{boxed, MigrationSet, MigrationTrait, MigrationTransaction};
 pub use runner::{MigrationStatus, Migrator, OnMismatch};
