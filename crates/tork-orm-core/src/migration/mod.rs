@@ -36,9 +36,6 @@
 //! # }
 //! ```
 
-use std::future::Future;
-use std::pin::Pin;
-
 pub mod checksum;
 pub mod ddl;
 pub mod files;
@@ -51,11 +48,10 @@ pub mod schema;
 
 mod store;
 
-/// A boxed, `Send` future borrowing for `'a`.
-///
-/// The migration engine stores async work behind trait objects (so migrations can
-/// be collected into a set); this is the future type those methods return.
-pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+// `BoxFuture` lives at the crate root so both migrations and transactions share
+// the same type alias. Re-export it from this module so the `#[migration]`
+// macro (which emits `::tork_orm::migration::BoxFuture`) continues to work.
+pub use crate::BoxFuture;
 
 pub use ddl::{
     AlterAction, AlterTable, ColumnSpec, DefaultValue, ForeignKeyAction, ForeignKeySpec, TableDef,

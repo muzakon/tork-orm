@@ -108,6 +108,33 @@ macro_rules! register_model {
     ($ty:ty) => {};
 }
 
+/// Runs an async block inside a database transaction, boxing it automatically.
+///
+/// This is ergonomic sugar over [`Database::transaction`], which requires
+/// `Box::pin` because the compiler cannot name the return type of an async
+/// closure. The macro adds that boilerplate so the call site reads naturally.
+///
+/// # Examples
+///
+/// ```no_run
+/// use tork_orm::prelude::*;
+/// use tork_orm::transaction;
+///
+/// # async fn run(db: Database) -> tork_orm::Result<()> {
+/// let rows = transaction!(db, |tx| async move {
+///     tx.execute("INSERT INTO t VALUES (1)".into(), vec![]).await?;
+///     Ok(1_usize)
+/// }).await?;
+/// # Ok(())
+/// # }
+/// ```
+#[macro_export]
+macro_rules! transaction {
+    ($db:expr, |$tx:ident| $body:expr) => {
+        $db.transaction(|$tx| ::std::boxed::Box::pin($body))
+    };
+}
+
 /// The common imports for working with the ORM.
 ///
 /// Bringing `tork_orm::prelude::*` into scope pulls in the `Model`/`QueryResult`
@@ -116,10 +143,10 @@ macro_rules! register_model {
 /// error type.
 pub mod prelude {
     pub use crate::{
-        abs, coalesce, func, length, lower, trim, upper, Assignment, BindValue, Column, ColumnDef,
-        Database, ErrorKind, Executor, Expr, ForeignKeyDef, FromRow, FromValue, IndexColumn,
-        IndexDef, Model, OrderItem, OrmError, Preloaded, QuerySet, Relation, RelationKind, Result,
-        Row, SqlType, Transaction, Value,
+        abs, coalesce, func, length, lower, trim, upper, Assignment, BindValue, BoxFuture, Column,
+        ColumnDef, Database, ErrorKind, Executor, Expr, ForeignKeyDef, FromRow, FromValue,
+        IndexColumn, IndexDef, Model, OrderItem, OrmError, Preloaded, QuerySet, Relation,
+        RelationKind, Result, Row, SqlType, Transaction, Value,
     };
     // The derive and attribute macros (`Model`, `relations`).
     pub use tork_orm_macros::*;

@@ -115,6 +115,21 @@ pub trait Dialect: Send + Sync + 'static {
         "ROLLBACK"
     }
 
+    /// The statement that creates a savepoint with the given name.
+    fn savepoint_sql(&self, name: &str) -> String {
+        format!("SAVEPOINT {name}")
+    }
+
+    /// The statement that releases (commits) a savepoint with the given name.
+    fn release_sql(&self, name: &str) -> String {
+        format!("RELEASE {name}")
+    }
+
+    /// The statement that rolls back to a savepoint without ending the transaction.
+    fn rollback_to_sql(&self, name: &str) -> String {
+        format!("ROLLBACK TO {name}")
+    }
+
     /// Returns the literal for `value` as it appears inline in a boolean column.
     ///
     /// Used when rendering DDL (a partial index predicate, say), where a parameter

@@ -9,6 +9,9 @@
 //! re-exports this runtime together with the derive macros.
 #![forbid(unsafe_code)]
 
+use std::future::Future;
+use std::pin::Pin;
+
 pub mod dialect;
 pub mod driver;
 pub mod query;
@@ -56,3 +59,9 @@ pub use row::Row;
 pub use value::{BindValue, FromValue, Value};
 
 pub use driver::ExecuteResult;
+
+/// A boxed, `Send` future borrowing for `'a`.
+///
+/// Used by the closure-based transaction API and the migration engine to store
+/// async work behind trait objects.
+pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
