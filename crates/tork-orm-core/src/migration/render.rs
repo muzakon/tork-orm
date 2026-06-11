@@ -278,6 +278,16 @@ fn render_column(dialect: &dyn Dialect, column: &ColumnSpec, is_auto_pk: bool, o
     }
 }
 
+/// Returns the rendered column type for a backend as an owned string.
+///
+/// Used by `generate` to compare the model's expected type against the live
+/// type string returned by database introspection.
+pub(crate) fn column_type_str(kind: DialectKind, ty: SqlType) -> String {
+    let mut out = String::new();
+    render_type(kind, ty, &mut out);
+    out
+}
+
 /// Renders a column type for a backend.
 fn render_type(kind: DialectKind, ty: SqlType, out: &mut String) {
     match kind {
