@@ -135,6 +135,26 @@ impl<M, T> Column<M, T> {
         Expr::in_list(self.expr(), values)
     }
 
+    /// `column NOT IN (values...)`
+    ///
+    /// An empty iterator matches all rows (SQL: `NOT (0 = 1)` = always true).
+    pub fn not_in<V, I>(self, values: I) -> Expr
+    where
+        V: IntoSqlValue<T>,
+        I: IntoIterator<Item = V>,
+    {
+        Expr::not(self.in_list(values))
+    }
+
+    /// `column BETWEEN low AND high` (inclusive on both ends).
+    pub fn between<V: IntoSqlValue<T>>(self, low: V, high: V) -> Expr {
+        Expr::between(
+            self.expr(),
+            Expr::value(low.into_sql_value()),
+            Expr::value(high.into_sql_value()),
+        )
+    }
+
     /// `column IS NULL`
     pub fn is_null(self) -> Expr {
         Expr::is_null(self.expr(), false)
@@ -227,6 +247,33 @@ impl<M, T: Numeric> Column<M, T> {
     /// `MAX(column)`.
     pub fn max(self) -> Expr {
         Expr::aggregate(AggFunc::Max, self.expr())
+    }
+}
+
+impl<M> Column<M, String> {
+    /// `column LIKE pattern`
+    ///
+    /// Wildcards (`%` for any sequence, `_` for a single character) are the
+    /// caller's responsibility and are passed through unchanged.
+    pub fn like(self, pattern: &str) -> Expr {
+        Expr::binary(
+            self.expr(),
+            crate::query::expr::BinaryOp::Like,
+            Expr::value(Value::Text(pattern.to_string())),
+        )
+    }
+
+    /// `column ILIKE pattern` — case-insensitive LIKE.
+    ///
+    /// On SQLite this is rendered as `lower(col) LIKE lower(pattern)`, which
+    /// covers non-ASCII Unicode correctly. On backends that have a native
+    /// `ILIKE` keyword it is rendered verbatim.
+    pub fn ilike(self, pattern: &str) -> Expr {
+        Expr::binary(
+            self.expr(),
+            crate::query::expr::BinaryOp::ILike,
+            Expr::value(Value::Text(pattern.to_string())),
+        )
     }
 }
 

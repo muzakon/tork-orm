@@ -140,3 +140,70 @@ fn nullable_column_compares_against_inner_type() {
     assert_eq!(sql, "\"users\".\"nickname\" = ?");
     assert_eq!(params, vec![Value::Text("ace".into())]);
 }
+
+// ── LIKE / ILIKE ─────────────────────────────────────────────────────────────
+
+#[test]
+fn like_renders_binary_with_pattern_bound() {
+    let (sql, params) = render(&User::username.like("ali%"));
+    assert_eq!(sql, "\"users\".\"username\" LIKE ?");
+    assert_eq!(params, vec![Value::Text("ali%".into())]);
+}
+
+#[test]
+fn ilike_renders_as_lower_both_sides() {
+    let (sql, params) = render(&User::username.ilike("ALICE"));
+    assert_eq!(sql, "lower(\"users\".\"username\") LIKE lower(?)");
+    assert_eq!(params, vec![Value::Text("ALICE".into())]);
+}
+
+#[test]
+fn like_on_optional_string_column() {
+    let (sql, params) = render(&User::nickname.like("%ace%"));
+    assert_eq!(sql, "\"users\".\"nickname\" LIKE ?");
+    assert_eq!(params, vec![Value::Text("%ace%".into())]);
+}
+
+// ── BETWEEN ──────────────────────────────────────────────────────────────────
+
+#[test]
+fn between_renders_with_two_bound_params() {
+    let (sql, params) = render(&User::id.between(1_i64, 10_i64));
+    assert_eq!(sql, "\"users\".\"id\" BETWEEN ? AND ?");
+    assert_eq!(params, vec![Value::Int(1), Value::Int(10)]);
+}
+
+#[test]
+fn between_on_string_column() {
+    let (sql, params) = render(&User::username.between("a", "m"));
+    assert_eq!(sql, "\"users\".\"username\" BETWEEN ? AND ?");
+    assert_eq!(params, vec![Value::Text("a".into()), Value::Text("m".into())]);
+}
+
+// ── NOT IN ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn not_in_renders_as_not_over_in_list() {
+    let (sql, params) = render(&User::id.not_in([1_i64, 2, 3]));
+    assert_eq!(sql, "NOT (\"users\".\"id\" IN (?, ?, ?))");
+    assert_eq!(params, vec![Value::Int(1), Value::Int(2), Value::Int(3)]);
+}
+
+#[test]
+fn not_in_empty_list_is_always_true() {
+    let empty: [i64; 0] = [];
+    let (sql, params) = render(&User::id.not_in(empty));
+    // NOT (0 = 1) — always true
+    assert_eq!(sql, "NOT (0 = 1)");
+    assert!(params.is_empty());
+}
+
+#[test]
+fn not_in_string_slice() {
+    let (sql, params) = render(&User::username.not_in(["alice", "bob"]));
+    assert_eq!(sql, "NOT (\"users\".\"username\" IN (?, ?))");
+    assert_eq!(
+        params,
+        vec![Value::Text("alice".into()), Value::Text("bob".into())]
+    );
+}

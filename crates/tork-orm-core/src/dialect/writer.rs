@@ -103,15 +103,24 @@ impl<'a> QueryWriter<'a> {
 
     /// Renders a boolean expression.
     pub fn write_expr(&mut self, expr: &Expr) {
+        use crate::query::expr::BinaryOp;
         match expr {
             Expr::Column { table, column } => self.push_qualified(table, column),
             Expr::Value(value) => self.push_bind(value.clone()),
+            Expr::Binary { left, op: BinaryOp::ILike, right } => self.write_ilike(left, right),
             Expr::Binary { left, op, right } => {
                 self.write_expr(left);
                 self.sql.push(' ');
                 self.push_sql(op.as_sql());
                 self.sql.push(' ');
                 self.write_expr(right);
+            }
+            Expr::Between { expr, low, high } => {
+                self.write_expr(expr);
+                self.push_sql(" BETWEEN ");
+                self.write_expr(low);
+                self.push_sql(" AND ");
+                self.write_expr(high);
             }
             Expr::Logical { op, items } => self.write_logical(*op, items),
             Expr::Not(inner) => {
@@ -148,6 +157,18 @@ impl<'a> QueryWriter<'a> {
                 self.push_identifier(alias);
             }
         }
+    }
+
+    /// Renders a case-insensitive LIKE as `lower(left) LIKE lower(right)`.
+    ///
+    /// SQLite has no ILIKE keyword; the `lower()` wrapping makes the comparison
+    /// case-insensitive for both ASCII and Unicode.
+    fn write_ilike(&mut self, left: &Expr, right: &Expr) {
+        self.push_sql("lower(");
+        self.write_expr(left);
+        self.push_sql(") LIKE lower(");
+        self.write_expr(right);
+        self.sql.push(')');
     }
 
     /// Renders an `AND`/`OR` group, parenthesizing when it joins more than one item.

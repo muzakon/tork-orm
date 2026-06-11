@@ -208,3 +208,124 @@ async fn count_and_exists() {
         .await
         .unwrap());
 }
+
+// ── LIKE / ILIKE ─────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn like_matches_prefix_pattern() {
+    let db = seed().await;
+    // Seeded: alice, bob, carol, dave — only "alice" matches "ali%".
+    let users = User::query()
+        .filter(User::username.like("ali%"))
+        .all(&db)
+        .await
+        .unwrap();
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0].username, "alice");
+}
+
+#[tokio::test]
+async fn like_no_match_returns_empty() {
+    let db = seed().await;
+    let users = User::query()
+        .filter(User::username.like("xyz%"))
+        .all(&db)
+        .await
+        .unwrap();
+    assert!(users.is_empty());
+}
+
+#[tokio::test]
+async fn ilike_is_case_insensitive() {
+    let db = seed().await;
+    // "ALICE" upper-cased should still match the stored "alice".
+    let users = User::query()
+        .filter(User::username.ilike("ALICE"))
+        .all(&db)
+        .await
+        .unwrap();
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0].username, "alice");
+}
+
+#[tokio::test]
+async fn ilike_substring_match() {
+    let db = seed().await;
+    // "%OL%" should match "carol".
+    let users = User::query()
+        .filter(User::username.ilike("%OL%"))
+        .all(&db)
+        .await
+        .unwrap();
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0].username, "carol");
+}
+
+// ── BETWEEN ──────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn between_returns_rows_in_range() {
+    let db = seed().await;
+    // Seeded ids: 1 (alice), 2 (bob), 3 (carol), 4 (dave).
+    let users = User::query()
+        .filter(User::id.between(2_i64, 3_i64))
+        .order_by(User::id.asc())
+        .all(&db)
+        .await
+        .unwrap();
+    assert_eq!(users.len(), 2);
+    assert_eq!(users[0].username, "bob");
+    assert_eq!(users[1].username, "carol");
+}
+
+#[tokio::test]
+async fn between_is_inclusive_on_both_ends() {
+    let db = seed().await;
+    // Rows at both boundary values (id=1 and id=4) must be included.
+    let users = User::query()
+        .filter(User::id.between(1_i64, 4_i64))
+        .count(&db)
+        .await
+        .unwrap();
+    assert_eq!(users, 4);
+}
+
+#[tokio::test]
+async fn between_returns_empty_for_inverted_range() {
+    let db = seed().await;
+    // low > high — no rows satisfy the predicate.
+    let users = User::query()
+        .filter(User::id.between(10_i64, 1_i64))
+        .all(&db)
+        .await
+        .unwrap();
+    assert!(users.is_empty());
+}
+
+// ── NOT IN ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn not_in_excludes_listed_values() {
+    let db = seed().await;
+    let users = User::query()
+        .filter(User::username.not_in(["alice", "bob"]))
+        .order_by(User::id.asc())
+        .all(&db)
+        .await
+        .unwrap();
+    assert_eq!(users.len(), 2);
+    assert_eq!(users[0].username, "carol");
+    assert_eq!(users[1].username, "dave");
+}
+
+#[tokio::test]
+async fn not_in_empty_list_matches_all_rows() {
+    let db = seed().await;
+    let empty: [&str; 0] = [];
+    let users = User::query()
+        .filter(User::username.not_in(empty))
+        .count(&db)
+        .await
+        .unwrap();
+    assert_eq!(users, 4);
+}

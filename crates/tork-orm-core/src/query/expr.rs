@@ -51,6 +51,13 @@ pub enum BinaryOp {
     Lt,
     /// `<=`
     Le,
+    /// `LIKE` — pattern match (case-sensitive on most backends).
+    Like,
+    /// `ILIKE` — case-insensitive pattern match.
+    ///
+    /// On SQLite, rendered as `lower(col) LIKE lower(pattern)` since SQLite has
+    /// no native ILIKE keyword. This covers non-ASCII Unicode correctly.
+    ILike,
 }
 
 impl BinaryOp {
@@ -63,6 +70,8 @@ impl BinaryOp {
             BinaryOp::Ge => ">=",
             BinaryOp::Lt => "<",
             BinaryOp::Le => "<=",
+            BinaryOp::Like => "LIKE",
+            BinaryOp::ILike => "ILIKE",
         }
     }
 }
@@ -153,6 +162,15 @@ pub enum Expr {
         /// The output name.
         alias: &'static str,
     },
+    /// A range check, `expr BETWEEN low AND high` (inclusive on both ends).
+    Between {
+        /// The tested expression.
+        expr: Box<Expr>,
+        /// The lower bound.
+        low: Box<Expr>,
+        /// The upper bound.
+        high: Box<Expr>,
+    },
 }
 
 impl Expr {
@@ -236,6 +254,15 @@ impl Expr {
         Expr::Func {
             name: name.into(),
             args: args.into_iter().collect(),
+        }
+    }
+
+    /// Builds a range check (`BETWEEN low AND high`, inclusive on both ends).
+    pub fn between(expr: Expr, low: Expr, high: Expr) -> Self {
+        Expr::Between {
+            expr: Box::new(expr),
+            low: Box::new(low),
+            high: Box::new(high),
         }
     }
 
