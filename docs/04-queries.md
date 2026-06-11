@@ -159,3 +159,134 @@ let exists: bool = User::query()
     .exists(&db)
     .await?;
 ```
+
+---
+
+## 6. Pattern Matching
+
+String columns expose `.like()` for pattern matching and `.ilike()` for case-insensitive matching. Both methods are only available on `String` (and `Option<String>`) columns — using them on a numeric column is a compile error.
+
+**Wildcards:** `%` matches any sequence of characters; `_` matches exactly one character. Wildcards are not escaped automatically.
+
+```rust
+// Prefix match: finds "alice" but not "bob"
+let users = User::query()
+    .filter(User::username.like("ali%"))
+    .all(&db)
+    .await?;
+
+// Case-insensitive: finds "alice" even when searching for "ALICE"
+let users = User::query()
+    .filter(User::username.ilike("ALICE"))
+    .all(&db)
+    .await?;
+
+// Substring, case-insensitive
+let users = User::query()
+    .filter(User::email.ilike("%@example.com"))
+    .all(&db)
+    .await?;
+```
+
+On SQLite, `ilike` is rendered as `lower(column) LIKE lower(pattern)` because SQLite has no native `ILIKE` keyword. This also makes the comparison case-insensitive for non-ASCII Unicode characters.
+
+---
+
+## 7. Range Filters
+
+`.between(low, high)` emits a `BETWEEN` predicate. Both bounds are **inclusive**. The method is available on any column type that can be compared, including integers, floats, and strings (lexicographic order).
+
+```rust
+// Integer range (inclusive)
+let users = User::query()
+    .filter(User::id.between(10_i64, 20_i64))
+    .all(&db)
+    .await?;
+// SQL: WHERE "users"."id" BETWEEN ? AND ?  params: [10, 20]
+
+// String range (lexicographic)
+let users = User::query()
+    .filter(User::username.between("a", "m"))
+    .all(&db)
+    .await?;
+```
+
+When `low > high`, no rows match (SQL `BETWEEN` is always false for an inverted range).
+
+---
+
+## 8. NOT IN
+
+`.not_in(values)` excludes rows whose column value appears in the provided list.
+
+```rust
+// Exclude specific usernames
+let users = User::query()
+    .filter(User::username.not_in(["alice", "bob"]))
+    .all(&db)
+    .await?;
+// SQL: WHERE NOT ("users"."username" IN (?, ?))
+
+// Exclude a dynamic list
+let banned_ids: Vec<i64> = vec![3, 7, 12];
+let users = User::query()
+    .filter(User::id.not_in(banned_ids))
+    .all(&db)
+    .await?;
+```
+
+An empty list matches **all rows** (`NOT (0 = 1)` is always true). This mirrors the behaviour of `.in_list([])`, which matches no rows.
+
+---
+
+## 9. Grouping and Aggregates
+
+Use `.group_by()` to collapse rows into groups and `.having()` to filter those groups. Combined with `.select()` and `.all_as::<T>()`, this covers the full SQL aggregate pattern.
+
+### group_by
+
+`.group_by()` accepts a single expression, a tuple of expressions, or any iterator of expressions.
+
+```rust
+// Count posts per user
+#[derive(QueryResult)]
+struct PostCount {
+    user_id: i64,
+    post_count: i64,
+}
+
+let stats = User::query()
+    .join(User::posts())
+    .select((
+        User::id.as_("user_id"),
+        Post::id.count().as_("post_count"),
+    ))
+    .group_by(User::id)
+    .order_by(Post::id.count().desc())
+    .all_as::<PostCount>(&db)
+    .await?;
+```
+
+### having
+
+`.having()` filters groups after aggregation. It takes any `Expr`, typically an aggregate expression with a comparison:
+
+```rust
+// Only users with more than two posts
+let stats = User::query()
+    .join(User::posts())
+    .select((
+        User::id.as_("user_id"),
+        User::username,
+        Post::id.count().as_("post_count"),
+    ))
+    .group_by((User::id, User::username))
+    .having(Post::id.count().gt(2_i64))
+    .order_by(Post::id.count().desc())
+    .all_as::<PostCount>(&db)
+    .await?;
+// SQL: ...GROUP BY "users"."id", "users"."username"
+//         HAVING COUNT("posts"."id") > ?
+```
+
+`.having()` without a prior `.group_by()` is valid SQL and filters the implicit single group (equivalent to a `WHERE` on an aggregate).
