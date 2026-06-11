@@ -40,6 +40,13 @@ pub enum MigrateCommand {
     Status,
     /// Revert the most recent migration and re-apply pending.
     Redo,
+    /// Scaffold a new migration file.
+    Create {
+        /// A short name for the migration (e.g. `add_orders`).
+        name: String,
+    },
+    /// Create the migrations directory.
+    Init,
 }
 
 /// Options available on every command.

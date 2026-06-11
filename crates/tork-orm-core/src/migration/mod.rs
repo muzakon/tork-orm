@@ -59,7 +59,7 @@ pub use ddl::{
     AlterAction, AlterTable, ColumnSpec, DefaultValue, ForeignKeyAction, ForeignKeySpec, IndexSpec,
     TableDef,
 };
-pub use files::{Applied, FileMigrator, FileStatus};
+pub use files::{head_revision, Applied, FileMigrator, FileStatus};
 pub use registry::{boxed, MigrationSet, MigrationTrait, MigrationTransaction};
 pub use runner::{MigrationStatus, Migrator, OnMismatch};
 pub use schema::{Column, CreateTable, DropTable, DynExecutor, ForeignKey, SchemaManager};

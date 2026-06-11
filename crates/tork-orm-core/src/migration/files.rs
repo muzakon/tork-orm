@@ -340,6 +340,19 @@ impl FileMigrator {
     }
 }
 
+/// Returns the head revision of the chain in `dir` — the last migration — or
+/// `None` if the directory is empty or absent.
+///
+/// Used to chain a newly created migration onto the most recent one without a
+/// database connection.
+pub fn head_revision(dir: &Path) -> crate::Result<Option<String>> {
+    if !dir.exists() {
+        return Ok(None);
+    }
+    let chain = build_chain(load_dir(dir)?)?;
+    Ok(chain.last().map(|file| file.revision.clone()))
+}
+
 /// Reads every `*.sql` migration file in `dir`.
 fn load_dir(dir: &Path) -> crate::Result<Vec<MigrationFile>> {
     let entries = std::fs::read_dir(dir).map_err(|e| {

@@ -17,7 +17,6 @@ tork-orm = { path = "../tork-orm", default-features = false, features = ["sqlite
 tokio = { workspace = true }
 clap = { workspace = true }
 uuid = { workspace = true }
-time = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -10,6 +10,7 @@ pub mod cli;
 mod commands;
 mod config;
 mod output;
+pub mod scaffold;
 mod style;
 
 use std::ffi::OsString;
@@ -60,27 +61,32 @@ where
 async fn dispatch(cli: &Cli, style: &Style) -> Result<(), OrmError> {
     let config = Config::resolve(&cli.global);
 
-    match &cli.command {
-        TopCommand::Migrate(command) => {
-            let database = Database::connect(config.require_database_url()?, 1).await?;
-            let migrator = FileMigrator::new(database, &config.dir).table(&config.table);
+    let TopCommand::Migrate(command) = &cli.command;
 
-            match command {
-                MigrateCommand::Status => commands::status::run(&migrator, style, &config.dir).await,
-                MigrateCommand::Up { target } => {
-                    commands::up::run(&migrator, style, parse_up_target(target.as_deref())).await
-                }
-                MigrateCommand::Down { target } => {
-                    commands::down::run(
-                        &migrator,
-                        style,
-                        parse_down_target(target.as_deref()),
-                        cli.global.yes,
-                    )
-                    .await
-                }
-                MigrateCommand::Redo => commands::redo::run(&migrator, style).await,
-            }
+    // Scaffolding commands touch only the filesystem — no database needed.
+    match command {
+        MigrateCommand::Create { name } => return commands::create::run(style, &config.dir, name),
+        MigrateCommand::Init => return commands::init::run(style, &config.dir, cli.global.yes),
+        _ => {}
+    }
+
+    let database = Database::connect(config.require_database_url()?, 1).await?;
+    let migrator = FileMigrator::new(database, &config.dir).table(&config.table);
+    match command {
+        MigrateCommand::Status => commands::status::run(&migrator, style, &config.dir).await,
+        MigrateCommand::Up { target } => {
+            commands::up::run(&migrator, style, parse_up_target(target.as_deref())).await
         }
+        MigrateCommand::Down { target } => {
+            commands::down::run(
+                &migrator,
+                style,
+                parse_down_target(target.as_deref()),
+                cli.global.yes,
+            )
+            .await
+        }
+        MigrateCommand::Redo => commands::redo::run(&migrator, style).await,
+        MigrateCommand::Create { .. } | MigrateCommand::Init => unreachable!(),
     }
 }
