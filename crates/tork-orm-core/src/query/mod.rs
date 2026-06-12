@@ -10,5 +10,5 @@ pub mod queryset;
 pub mod union;
 pub mod write;
 
-pub use queryset::QuerySet;
+pub use queryset::{Page, QuerySet};
 pub use union::UnionQuery;

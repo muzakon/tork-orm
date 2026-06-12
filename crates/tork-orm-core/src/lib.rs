@@ -54,7 +54,7 @@ pub use query::expr::{AggFunc, BinaryOp, CaseWhen, Expr, LogicalOp};
 pub use query::func::{abs, ceil, coalesce, concat, floor, func, length, lower, round, substr, substr_len, trim, upper};
 pub use query::projection::{ExprTuple, IntoExpr, IntoSelectItem, Projection};
 pub use query::write::{Assignment, DeleteStatement, InsertStatement, OnConflict, UpdateStatement};
-pub use query::QuerySet;
+pub use query::{Page, QuerySet};
 pub use relation::{Relation, RelationKind};
 pub use row::Row;
 pub use value::{BindValue, FromValue, Value};

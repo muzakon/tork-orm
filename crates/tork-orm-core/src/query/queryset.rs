@@ -12,7 +12,8 @@ use crate::error::OrmError;
 use crate::executor::Executor;
 use crate::model::{FromRow, Model};
 use crate::query::ast::{JoinKind, OrderItem, SelectItem, SelectStatement};
-use crate::query::expr::Expr;
+use crate::query::column::Column;
+use crate::query::expr::{BinaryOp, Expr};
 use crate::query::write::{Assignment, DeleteStatement, UpdateStatement};
 
 /// A typed query over a model `M`.
@@ -42,6 +43,41 @@ use crate::query::write::{Assignment, DeleteStatement, UpdateStatement};
 pub struct QuerySet<M: Model> {
     statement: SelectStatement,
     _marker: PhantomData<fn() -> M>,
+}
+
+/// A page of results returned by [`QuerySet::paginate`] and
+/// [`QuerySet::paginate_as`].
+///
+/// Carries the items for the current page together with pagination metadata so
+/// callers can render page links and "X of Y" summaries without additional
+/// queries.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use tork_orm_core::query::Page;
+/// # struct User;
+/// let page = Page::<User> {
+///     items: vec![],
+///     total: 0,
+///     page: 1,
+///     page_size: 20,
+///     pages: 0,
+/// };
+/// # let _ = page;
+/// ```
+#[derive(Debug, Clone)]
+pub struct Page<T> {
+    /// The rows on this page.
+    pub items: Vec<T>,
+    /// The total number of matching rows across all pages.
+    pub total: i64,
+    /// The current page number (1-based).
+    pub page: u64,
+    /// The number of items per page.
+    pub page_size: u64,
+    /// The total number of pages (`ceil(total / page_size)`).
+    pub pages: u64,
 }
 
 impl<M: Model> QuerySet<M> {
@@ -230,6 +266,28 @@ impl<M: Model> QuerySet<M> {
         self
     }
 
+    /// Ensures the query returns zero rows by adding a never-true filter
+    /// (`0 = 1`). Useful for composing with `union` when you need an empty
+    /// branch, or as a base that only produces rows once filters are applied.
+    pub fn none(mut self) -> Self {
+        self.statement.filters.push(Expr::binary(
+            Expr::value(crate::value::Value::Int(0)),
+            BinaryOp::Eq,
+            Expr::value(crate::value::Value::Int(1)),
+        ));
+        self
+    }
+
+    /// Locks the selected rows with `FOR UPDATE` so no other transaction can
+    /// modify or lock them until the current transaction commits.
+    ///
+    /// Only supported on backends with row-level locking (PostgreSQL, MySQL,
+    /// SQLite 3.54+). Has no effect on read-only connections.
+    pub fn for_update(mut self) -> Self {
+        self.statement.for_update = true;
+        self
+    }
+
     /// Replaces the projection with a tuple of columns and expressions.
     ///
     /// Pair with [`all_as`](Self::all_as) and a `#[derive(QueryResult)]` DTO whose
@@ -368,6 +426,48 @@ impl<M: Model> QuerySet<M> {
         }
     }
 
+    /// Runs the query expecting zero or one row.
+    ///
+    /// Returns `Ok(None)` when no row matches and `Ok(Some(m))` when exactly one
+    /// does. Errors with [`ErrorKind::MultipleFound`] when more than one row
+    /// matches — unlike [`first`](Self::first) which silently truncates.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::MultipleFound`](crate::ErrorKind::MultipleFound) when
+    /// more than one row matches the query.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use tork_orm_core::{Database, Model, Value};
+    /// # struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } }
+    /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
+    /// let user: Option<User> = User::query()
+    ///     .filter(User::query().into_statement().filters.is_empty().then_some(tork_orm_core::Expr::CountStar).unwrap_or(tork_orm_core::Expr::CountStar))
+    ///     .one_or_none(&db)
+    ///     .await?;
+    /// # let _ = user; Ok(())
+    /// # }
+    /// ```
+    pub async fn one_or_none<E: Executor>(
+        mut self,
+        executor: E,
+    ) -> crate::Result<Option<M>> {
+        // Fetch two rows so a second match can be detected.
+        self.statement.limit = Some(2);
+        let (sql, params) = render_select(executor.dialect(), &self.statement);
+        let rows = executor.fetch_all(sql, params).await?;
+        match rows.len() {
+            0 => Ok(None),
+            1 => M::from_row(&rows[0]).map(Some),
+            _ => Err(OrmError::multiple_found(format!(
+                "more than one row in `{}` matched the query",
+                M::TABLE
+            ))),
+        }
+    }
+
     /// Runs a `COUNT(*)` over the query's filters.
     pub async fn count<E: Executor>(self, executor: E) -> crate::Result<i64> {
         let (sql, params) = render_count(executor.dialect(), &self.statement);
@@ -378,6 +478,83 @@ impl<M: Model> QuerySet<M> {
         }
     }
 
+    /// Fetches a page of results.
+    ///
+    /// Runs a count query and a select query with the appropriate `LIMIT` /
+    /// `OFFSET`. The page number is 1-based — passing `0` is treated as page 1.
+    /// Returns a [`Page`] containing the items and pagination metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use tork_orm_core::{Database, Model, Value, query::Page};
+    /// # struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } }
+    /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
+    /// let page: Page<User> = User::query()
+    ///     .order_by(User::query().into_statement().filters.is_empty().then_some(tork_orm_core::OrderItem::new(tork_orm_core::Expr::Value(Value::Int(0)), false)).unwrap_or(tork_orm_core::OrderItem::new(tork_orm_core::Expr::Value(Value::Int(0)), false)))
+    ///     .paginate(&db, 1, 20)
+    ///     .await?;
+    /// println!("Page {} of {} ({} items)", page.page, page.pages, page.items.len());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn paginate<E: Executor>(
+        self,
+        executor: E,
+        page: u64,
+        page_size: u64,
+    ) -> crate::Result<Page<M>> {
+        self.paginate_as::<M, E>(executor, page, page_size).await
+    }
+
+    /// Fetches a page of results mapped to a custom [`FromRow`] type.
+    ///
+    /// Like [`paginate`](Self::paginate) but returns a `Page<T>` instead of
+    /// `Page<M>`. Useful for paginated projections.
+    pub async fn paginate_as<T: FromRow, E: Executor>(
+        self,
+        executor: E,
+        page: u64,
+        page_size: u64,
+    ) -> crate::Result<Page<T>> {
+        let page = page.max(1);
+        let page_size = page_size.max(1);
+
+        // Count total matching rows.
+        let (count_sql, count_params) = render_count(executor.dialect(), &self.statement);
+        let rows = executor.fetch_all(count_sql, count_params).await?;
+        let total: i64 = match rows.first() {
+            Some(row) => row.get_index::<i64>(0)?,
+            None => 0,
+        };
+
+        // Compute page count and clamp page.
+        let pages = if total == 0 {
+            1
+        } else {
+            (total as u64).div_ceil(page_size)
+        };
+        let page = page.min(pages);
+
+        // Fetch the items for this page.
+        let offset = (page - 1) * page_size;
+        let mut statement = self.statement;
+        statement.limit = Some(page_size);
+        statement.offset = Some(offset);
+
+        let (sql, params) = render_select(executor.dialect(), &statement);
+        let rows = executor.fetch_all(sql, params).await?;
+        let items: Vec<T> = rows.iter().map(T::from_row).collect::<crate::Result<_>>()?;
+
+        Ok(Page {
+            items,
+            total,
+            page,
+            page_size,
+            pages,
+        })
+    }
+
     /// Returns whether any row matches the query's filters.
     pub async fn exists<E: Executor>(self, executor: E) -> crate::Result<bool> {
         let (sql, params) = render_exists(executor.dialect(), &self.statement);
@@ -386,6 +563,91 @@ impl<M: Model> QuerySet<M> {
             Some(row) => row.get_index::<bool>(0),
             None => Ok(false),
         }
+    }
+
+    /// Returns all matching rows in batches of `size`, using offset-based
+    /// chunking. The last batch may be smaller than `size`.
+    ///
+    /// All batches are loaded eagerly (no server-side cursor). Useful for
+    /// processing large result sets in a memory-constrained pipeline without
+    /// loading everything at once.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use tork_orm_core::{Database, Model, Value};
+    /// # struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } }
+    /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
+    /// let batches = User::query().chunk(&db, 100).await?;
+    /// for batch in batches {
+    ///     for user in batch {
+    ///         println!("{:?}", user.primary_key_value());
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn chunk<E: Executor>(
+        self,
+        executor: E,
+        size: u64,
+    ) -> crate::Result<Vec<Vec<M>>> {
+        let size = size.max(1);
+        let mut batches = Vec::new();
+        let mut offset = 0u64;
+
+        loop {
+            let mut batch_stmt = self.statement.clone();
+            batch_stmt.limit = Some(size);
+            batch_stmt.offset = Some(offset);
+            let (sql, params) = render_select(executor.dialect(), &batch_stmt);
+            let rows = executor.fetch_all(sql, params).await?;
+            if rows.is_empty() {
+                break;
+            }
+            let batch: Vec<M> = rows.iter().map(M::from_row).collect::<crate::Result<_>>()?;
+            let batch_len = batch.len() as u64;
+            batches.push(batch);
+            if batch_len < size {
+                break;
+            }
+            offset += size;
+        }
+
+        Ok(batches)
+    }
+
+    /// Extracts a single column's values from every matching row.
+    ///
+    /// Replaces the projection with the given column and returns a flat `Vec`
+    /// of its values — useful for building ID lists, dropdown options, or
+    /// simple lookups without defining a DTO.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use tork_orm_core::{Database, Model, Value};
+    /// # struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } }
+    /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
+    /// let names: Vec<String> = User::query()
+    ///     .filter(User::query().into_statement().filters.is_empty().then_some(tork_orm_core::Expr::CountStar).unwrap_or(tork_orm_core::Expr::CountStar))
+    ///     .pluck(&db, User::query().into_statement().filters.is_empty().then_some(tork_orm_core::Column::new("users", "username")).unwrap_or(tork_orm_core::Column::new("users", "username")))
+    ///     .await?;
+    /// # let _ = names; Ok(())
+    /// # }
+    /// ```
+    pub async fn pluck<T: crate::value::FromValue, E: Executor>(
+        mut self,
+        executor: E,
+        column: Column<M, T>,
+    ) -> crate::Result<Vec<T>> {
+        self.statement.projection = vec![SelectItem::Column {
+            table: column.table(),
+            column: column.name(),
+        }];
+        let (sql, params) = render_select(executor.dialect(), &self.statement);
+        let rows = executor.fetch_all(sql, params).await?;
+        rows.iter().map(|row| row.get::<T>(column.name())).collect()
     }
 
     /// Applies column assignments to every row matching the query's filters.

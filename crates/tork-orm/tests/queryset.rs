@@ -433,3 +433,61 @@ async fn not_in_subquery_filters_rows_at_runtime() {
     assert_eq!(users.len(), 3);
     assert!(users.iter().all(|u| u.username != "bob"));
 }
+
+// ── NONE ──────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn none_returns_zero_rows() {
+    let db = seed().await;
+    let users = User::query().none().all(&db).await.unwrap();
+    assert!(users.is_empty());
+}
+
+#[tokio::test]
+async fn none_works_with_filters() {
+    let db = seed().await;
+    // Adding a filter after none() should still yield zero rows because 0=1
+    // is AND-ed with the filter.
+    let users = User::query()
+        .none()
+        .filter(User::is_active.eq(true))
+        .all(&db)
+        .await
+        .unwrap();
+    assert!(users.is_empty());
+}
+
+// ── FOR UPDATE ────────────────────────────────────────────────────────────────
+
+#[test]
+fn for_update_appears_in_rendered_sql() {
+    let stmt = User::query()
+        .filter(User::is_active.eq(true))
+        .for_update()
+        .into_statement();
+    assert!(stmt.for_update);
+
+    let dialect = tork_orm_core::dialect::SqliteDialect::new();
+    let (sql, _) = tork_orm_core::dialect::render_select(&dialect, &stmt);
+    assert!(
+        sql.ends_with(" FOR UPDATE"),
+        "expected SQL to end with ' FOR UPDATE', got: {sql}"
+    );
+}
+
+#[test]
+fn for_update_after_limit_offset() {
+    let stmt = User::query()
+        .for_update()
+        .order_by(User::id.asc())
+        .limit(2)
+        .offset(1)
+        .into_statement();
+
+    let dialect = tork_orm_core::dialect::SqliteDialect::new();
+    let (sql, _) = tork_orm_core::dialect::render_select(&dialect, &stmt);
+    assert!(
+        sql.contains("LIMIT 2 OFFSET 1 FOR UPDATE"),
+        "expected 'LIMIT 2 OFFSET 1 FOR UPDATE', got: {sql}"
+    );
+}

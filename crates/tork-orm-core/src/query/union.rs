@@ -46,6 +46,7 @@ impl<M: Model> UnionQuery<M> {
                 order_by: Vec::new(),
                 limit: None,
                 offset: None,
+                for_update: false,
             },
             _marker: PhantomData,
         }

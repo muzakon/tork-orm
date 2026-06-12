@@ -128,6 +128,8 @@ pub struct SelectStatement {
     pub offset: Option<u64>,
     /// Whether to return distinct rows.
     pub distinct: bool,
+    /// Whether to append `FOR UPDATE` (row-level locking).
+    pub for_update: bool,
 }
 
 /// A `UNION` or `UNION ALL` combining two or more `SELECT` statements.
@@ -149,6 +151,8 @@ pub struct UnionStatement {
     pub limit: Option<u64>,
     /// Optional row offset applied to the combined result.
     pub offset: Option<u64>,
+    /// Whether to append `FOR UPDATE`.
+    pub for_update: bool,
 }
 
 impl SelectStatement {
@@ -165,6 +169,7 @@ impl SelectStatement {
             limit: None,
             offset: None,
             distinct: false,
+            for_update: false,
         }
     }
 }
