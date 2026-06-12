@@ -337,6 +337,9 @@ impl<'a> QueryWriter<'a> {
             self.push_sql(" OFFSET ");
             self.push_sql(&offset.to_string());
         }
+        if statement.for_update {
+            self.push_sql(" FOR UPDATE");
+        }
     }
 
     /// Renders a `UNION` / `UNION ALL` of several `SELECT` statements.
@@ -370,6 +373,9 @@ impl<'a> QueryWriter<'a> {
             self.push_sql(" OFFSET ");
             self.push_sql(&offset.to_string());
         }
+        if statement.for_update {
+            self.push_sql(" FOR UPDATE");
+        }
     }
 
     /// Renders a `SELECT COUNT(*)` over a statement's table and filters.
@@ -389,10 +395,11 @@ impl<'a> QueryWriter<'a> {
 
     /// Renders an `INSERT` statement.
     pub fn write_insert(&mut self, statement: &InsertStatement) {
-        match statement.on_conflict {
+        match &statement.on_conflict {
             OnConflict::None    => self.push_sql("INSERT INTO "),
             OnConflict::Replace => self.push_sql("INSERT OR REPLACE INTO "),
             OnConflict::Ignore  => self.push_sql("INSERT OR IGNORE INTO "),
+            OnConflict::Update { .. } => self.push_sql("INSERT INTO "),
         }
         self.push_identifier(statement.table);
         self.push_sql(" (");
@@ -415,6 +422,24 @@ impl<'a> QueryWriter<'a> {
                 self.push_bind(value.clone());
             }
             self.sql.push(')');
+        }
+        if let OnConflict::Update { constraint, updates } = &statement.on_conflict {
+            self.push_sql(" ON CONFLICT (");
+            for (index, col) in constraint.iter().enumerate() {
+                if index != 0 {
+                    self.push_sql(", ");
+                }
+                self.push_identifier(col);
+            }
+            self.push_sql(") DO UPDATE SET ");
+            for (index, assignment) in updates.iter().enumerate() {
+                if index != 0 {
+                    self.push_sql(", ");
+                }
+                self.push_identifier(assignment.column);
+                self.push_sql(" = ");
+                self.write_expr(&assignment.value);
+            }
         }
         if !statement.returning.is_empty() {
             self.push_sql(" RETURNING ");

@@ -9,6 +9,7 @@ resolver = "2"
 members = [
     "crates/tork-orm",
     "crates/tork-orm-cli",
+    "crates/tork-orm-config",
     "crates/tork-orm-core",
     "crates/tork-orm-macros",
     "examples/orm_api",
@@ -27,6 +28,10 @@ repository = "https://github.com/muzakon/tork"
 # ORM crates.
 tork-orm-core = { path = "crates/tork-orm-core", version = "0.1.0", default-features = false }
 tork-orm-macros = { path = "crates/tork-orm-macros", version = "0.1.0" }
+tork-orm-config = { path = "crates/tork-orm-config", version = "0.1.0" }
+
+# Reads the `[package.metadata.tork]` project configuration.
+toml = "0.8"
 
 # Framework crates, by relative path, for the native integration (`tork` feature).
 tork = { path = "../framework/crates/tork" }
@@ -35,6 +40,11 @@ tork-core = { path = "../framework/crates/tork-core" }
 # SQLite driver: the safe binding with libsqlite3 statically bundled, so a built
 # binary carries no shared-library dependency.
 rusqlite = { version = "0.32", features = ["bundled"] }
+
+# PostgreSQL driver and async connection pool (behind the `postgres` feature).
+tokio-postgres = { version = "0.7", features = ["with-time-0_3"] }
+deadpool-postgres = "0.14"
+bytes = "1"
 
 # Async runtime and time handling.
 tokio = { version = "1.52", features = [

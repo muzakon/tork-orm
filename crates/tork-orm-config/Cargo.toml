@@ -1,0 +1,12 @@
+[package]
+name = "tork-orm-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Reads the [package.metadata.tork] project configuration shared by the Tork ORM macros and CLI."
+
+[dependencies]
+toml = { workspace = true }

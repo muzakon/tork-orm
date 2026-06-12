@@ -12,6 +12,9 @@ description = "Core runtime for the Tork ORM: dialect-agnostic query model, type
 tokio = { workspace = true }
 time = { workspace = true, features = ["formatting", "parsing", "macros"] }
 rusqlite = { workspace = true, optional = true }
+tokio-postgres = { workspace = true, optional = true }
+deadpool-postgres = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
 tork-core = { workspace = true, optional = true }
 inventory = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
@@ -20,8 +23,11 @@ uuid = { workspace = true, optional = true }
 default = ["sqlite", "tork", "migrations"]
 # Bundled SQLite backend. The only database backend in this phase.
 sqlite = ["dep:rusqlite"]
-# Reserved for future backends; each adds its own driver and dialect.
-postgres = []
+# PostgreSQL backend: the live tokio-postgres driver and async pool. The
+# PostgreSQL dialect (SQL/DDL generation) is always available; this feature adds
+# the network driver needed to connect to a server.
+postgres = ["dep:tokio-postgres", "dep:deadpool-postgres", "dep:bytes"]
+# Reserved for a future backend.
 mysql = []
 # Schema migrations (the migration engine) and `migrate generate`. The link-time
 # model registry that generate enumerates pulls in `inventory`; generated

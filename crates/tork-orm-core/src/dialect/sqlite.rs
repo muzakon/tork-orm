@@ -59,12 +59,23 @@ impl Dialect for SqliteDialect {
         true
     }
 
-    fn map_sql_type(&self, ty: SqlType) -> &'static str {
+    fn map_sql_type(&self, ty: SqlType, out: &mut String) {
+        // SQLite uses type affinity, so the declared type can keep its readable
+        // spelling (e.g. `BOOLEAN`, `TIMESTAMP`, `VARCHAR(n)`) and still resolve
+        // to the right storage class.
         match ty {
-            SqlType::Boolean | SqlType::Integer | SqlType::BigInt => "INTEGER",
-            SqlType::Real => "REAL",
-            SqlType::Text | SqlType::Varchar(_) | SqlType::Timestamp => "TEXT",
-            SqlType::Blob => "BLOB",
+            SqlType::Boolean => out.push_str("BOOLEAN"),
+            SqlType::Integer => out.push_str("INTEGER"),
+            SqlType::BigInt => out.push_str("BIGINT"),
+            SqlType::Real => out.push_str("REAL"),
+            SqlType::Text => out.push_str("TEXT"),
+            SqlType::Varchar(length) => {
+                out.push_str("VARCHAR(");
+                out.push_str(&length.to_string());
+                out.push(')');
+            }
+            SqlType::Timestamp => out.push_str("TIMESTAMP"),
+            SqlType::Blob => out.push_str("BLOB"),
         }
     }
 

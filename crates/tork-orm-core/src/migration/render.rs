@@ -265,7 +265,7 @@ fn render_column(dialect: &dyn Dialect, column: &ColumnSpec, is_auto_pk: bool, o
         return;
     }
 
-    render_type(dialect.kind(), column.ty, out);
+    dialect.map_sql_type(column.ty, out);
     if !column.nullable {
         out.push_str(" NOT NULL");
     }
@@ -274,44 +274,26 @@ fn render_column(dialect: &dyn Dialect, column: &ColumnSpec, is_auto_pk: bool, o
     }
     if let Some(default) = &column.default {
         out.push_str(" DEFAULT ");
-        render_default(default, out);
+        render_default(dialect, default, out);
     }
 }
 
-/// Returns the rendered column type for a backend as an owned string.
+/// Returns the rendered column type for a dialect as an owned string.
 ///
 /// Used by `generate` to compare the model's expected type against the live
-/// type string returned by database introspection.
-pub(crate) fn column_type_str(kind: DialectKind, ty: SqlType) -> String {
+/// type string returned by database introspection. Delegates to
+/// [`Dialect::map_sql_type`] so the comparison uses the same spelling the DDL
+/// would emit.
+pub(crate) fn column_type_str(dialect: &dyn Dialect, ty: SqlType) -> String {
     let mut out = String::new();
-    render_type(kind, ty, &mut out);
+    dialect.map_sql_type(ty, &mut out);
     out
 }
 
-/// Renders a column type for a backend.
-fn render_type(kind: DialectKind, ty: SqlType, out: &mut String) {
-    match kind {
-        DialectKind::Sqlite | DialectKind::Postgres | DialectKind::Mysql => match ty {
-            SqlType::Boolean => out.push_str("BOOLEAN"),
-            SqlType::Integer => out.push_str("INTEGER"),
-            SqlType::BigInt => out.push_str("BIGINT"),
-            SqlType::Real => out.push_str("REAL"),
-            SqlType::Text => out.push_str("TEXT"),
-            SqlType::Varchar(length) => {
-                out.push_str("VARCHAR(");
-                out.push_str(&length.to_string());
-                out.push(')');
-            }
-            SqlType::Timestamp => out.push_str("TIMESTAMP"),
-            SqlType::Blob => out.push_str("BLOB"),
-        },
-    }
-}
-
 /// Renders a default value as a SQL literal.
-fn render_default(default: &DefaultValue, out: &mut String) {
+fn render_default(dialect: &dyn Dialect, default: &DefaultValue, out: &mut String) {
     match default {
-        DefaultValue::Bool(value) => out.push(if *value { '1' } else { '0' }),
+        DefaultValue::Bool(value) => out.push_str(dialect.bool_literal(*value)),
         DefaultValue::Int(value) => out.push_str(&value.to_string()),
         DefaultValue::Real(value) => out.push_str(&value.to_string()),
         DefaultValue::Text(value) => quote_string_literal(value, out),

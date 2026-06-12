@@ -111,7 +111,7 @@ pub async fn generate<E: Executor + Sync>(
         for model_col in &schema.columns {
             if let Some(existing_col) = existing_col_map.get(model_col.name) {
                 let model_type =
-                    render::column_type_str(dialect.kind(), model_col.sql_type);
+                    render::column_type_str(dialect, model_col.sql_type);
                 let db_type = existing_col.declared_type.trim().to_uppercase();
                 // Skip type and nullability checks for primary key columns.
                 // SQLite always stores an auto-increment PK as INTEGER (regardless

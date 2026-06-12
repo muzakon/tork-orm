@@ -14,6 +14,10 @@ pub mod sqlite;
 #[cfg(feature = "sqlite")]
 pub use sqlite::SqliteDialect;
 
+pub mod postgres;
+
+pub use postgres::PostgresDialect;
+
 pub use writer::{
     QueryWriter, predicate_sql, quote_string_literal, render_count, render_delete, render_exists,
     render_expr, render_insert, render_select, render_union, render_update,
@@ -88,8 +92,12 @@ pub trait Dialect: Send + Sync + 'static {
     /// Returns `true` if the backend supports `INSERT ... RETURNING`.
     fn supports_returning(&self) -> bool;
 
-    /// Maps an abstract [`SqlType`] to the backend's concrete type keyword.
-    fn map_sql_type(&self, ty: SqlType) -> &'static str;
+    /// Writes the backend's concrete column type for an abstract [`SqlType`].
+    ///
+    /// This is the single source of truth for column type spelling in DDL. It
+    /// writes into `out` rather than returning a `&'static str` so that
+    /// parameterized types such as `VARCHAR(n)` can include their length.
+    fn map_sql_type(&self, ty: SqlType, out: &mut String);
 
     /// Returns a quoted identifier as an owned `String`.
     ///
