@@ -157,6 +157,57 @@ async fn group_by_without_having_returns_all_groups() {
     assert_eq!(stats[1].total_views, 20);
 }
 
+// ── LEFT JOIN ────────────────────────────────────────────────────────────────
+
+#[derive(Debug, QueryResult)]
+struct UserCount {
+    username: String,
+    post_count: i64,
+}
+
+#[tokio::test]
+async fn left_join_keeps_rows_with_no_match() {
+    let db = seed().await;
+
+    // Carol has zero posts — INNER JOIN would drop her; LEFT JOIN must not.
+    let rows = User::query()
+        .left_join(User::posts())
+        .select((
+            User::username,
+            Post::id.count().as_("post_count"),
+        ))
+        .group_by((User::id, User::username))
+        .order_by(User::id.asc())
+        .all_as::<UserCount>(&db)
+        .await
+        .unwrap();
+
+    assert_eq!(rows.len(), 3, "all three users should appear");
+    assert_eq!(rows[0].username, "alice");
+    assert_eq!(rows[0].post_count, 4);
+    assert_eq!(rows[1].username, "bob");
+    assert_eq!(rows[1].post_count, 2);
+    assert_eq!(rows[2].username, "carol");
+    assert_eq!(rows[2].post_count, 0);
+}
+
+#[tokio::test]
+async fn inner_join_drops_rows_with_no_match() {
+    let db = seed().await;
+
+    // Sanity check: INNER JOIN still drops carol.
+    let rows = User::query()
+        .join(User::posts())
+        .select((User::username, Post::id.count().as_("post_count")))
+        .group_by((User::id, User::username))
+        .order_by(User::id.asc())
+        .all_as::<UserCount>(&db)
+        .await
+        .unwrap();
+
+    assert_eq!(rows.len(), 2, "carol has no posts so she is excluded");
+}
+
 #[tokio::test]
 async fn min_max_avg_aggregates() {
     let db = seed().await;

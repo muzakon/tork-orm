@@ -248,6 +248,31 @@ impl<M, T: Numeric> Column<M, T> {
     pub fn max(self) -> Expr {
         Expr::aggregate(AggFunc::Max, self.expr())
     }
+
+    /// `column + value`
+    pub fn add<V: IntoSqlValue<T>>(self, value: V) -> Expr {
+        self.expr().add(Expr::value(value.into_sql_value()))
+    }
+
+    /// `column - value`
+    pub fn sub<V: IntoSqlValue<T>>(self, value: V) -> Expr {
+        self.expr().sub(Expr::value(value.into_sql_value()))
+    }
+
+    /// `column * value`
+    pub fn mul<V: IntoSqlValue<T>>(self, value: V) -> Expr {
+        self.expr().mul(Expr::value(value.into_sql_value()))
+    }
+
+    /// `column / value`
+    pub fn div<V: IntoSqlValue<T>>(self, value: V) -> Expr {
+        self.expr().div(Expr::value(value.into_sql_value()))
+    }
+
+    /// `column % value`
+    pub fn rem<V: IntoSqlValue<T>>(self, value: V) -> Expr {
+        self.expr().rem(Expr::value(value.into_sql_value()))
+    }
 }
 
 impl<M> Column<M, String> {
@@ -274,6 +299,36 @@ impl<M> Column<M, String> {
             crate::query::expr::BinaryOp::ILike,
             Expr::value(Value::Text(pattern.to_string())),
         )
+    }
+
+    /// `column LIKE 'prefix%'` — matches rows where the column starts with `prefix`.
+    pub fn starts_with(self, prefix: &str) -> Expr {
+        self.like(&format!("{prefix}%"))
+    }
+
+    /// `column LIKE '%suffix'` — matches rows where the column ends with `suffix`.
+    pub fn ends_with(self, suffix: &str) -> Expr {
+        self.like(&format!("%{suffix}"))
+    }
+
+    /// `column LIKE '%needle%'` — matches rows where the column contains `needle`.
+    pub fn contains(self, needle: &str) -> Expr {
+        self.like(&format!("%{needle}%"))
+    }
+
+    /// Case-insensitive `starts_with`.
+    pub fn istarts_with(self, prefix: &str) -> Expr {
+        self.ilike(&format!("{prefix}%"))
+    }
+
+    /// Case-insensitive `ends_with`.
+    pub fn iends_with(self, suffix: &str) -> Expr {
+        self.ilike(&format!("%{suffix}"))
+    }
+
+    /// Case-insensitive `contains`.
+    pub fn icontains(self, needle: &str) -> Expr {
+        self.ilike(&format!("%{needle}%"))
     }
 }
 

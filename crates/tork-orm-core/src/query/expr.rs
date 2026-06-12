@@ -51,6 +51,16 @@ pub enum BinaryOp {
     Lt,
     /// `<=`
     Le,
+    /// `+` — addition.
+    Add,
+    /// `-` — subtraction.
+    Sub,
+    /// `*` — multiplication.
+    Mul,
+    /// `/` — division.
+    Div,
+    /// `%` — remainder (modulo).
+    Mod,
     /// `LIKE` — pattern match (case-sensitive on most backends).
     Like,
     /// `ILIKE` — case-insensitive pattern match.
@@ -70,6 +80,11 @@ impl BinaryOp {
             BinaryOp::Ge => ">=",
             BinaryOp::Lt => "<",
             BinaryOp::Le => "<=",
+            BinaryOp::Add => "+",
+            BinaryOp::Sub => "-",
+            BinaryOp::Mul => "*",
+            BinaryOp::Div => "/",
+            BinaryOp::Mod => "%",
             BinaryOp::Like => "LIKE",
             BinaryOp::ILike => "ILIKE",
         }
@@ -171,6 +186,56 @@ pub enum Expr {
         /// The upper bound.
         high: Box<Expr>,
     },
+    /// `CASE WHEN cond THEN result ... [ELSE default] END`.
+    Case {
+        /// The condition-result pairs, evaluated in order.
+        whens: Vec<(Expr, Expr)>,
+        /// The fallback expression when no condition matches.
+        else_expr: Option<Box<Expr>>,
+    },
+}
+
+/// Builder for a `CASE WHEN` expression.
+///
+/// Constructed via [`Expr::case()`]; finalized by calling [`end`](Self::end).
+///
+/// # Examples
+///
+/// ```
+/// use tork_orm_core::query::expr::Expr;
+/// use tork_orm_core::value::Value;
+///
+/// let expr = Expr::case()
+///     .when(Expr::value(Value::Bool(true)), Expr::value(Value::Int(1)))
+///     .else_(Expr::value(Value::Int(0)))
+///     .end();
+/// # let _ = expr;
+/// ```
+pub struct CaseWhen {
+    whens: Vec<(Expr, Expr)>,
+    else_expr: Option<Box<Expr>>,
+}
+
+impl CaseWhen {
+    /// Adds a `WHEN cond THEN result` branch.
+    pub fn when(mut self, cond: Expr, result: Expr) -> Self {
+        self.whens.push((cond, result));
+        self
+    }
+
+    /// Sets the `ELSE default` fallback.
+    pub fn else_(mut self, default: Expr) -> Self {
+        self.else_expr = Some(Box::new(default));
+        self
+    }
+
+    /// Finalizes the expression into an [`Expr::Case`] node.
+    pub fn end(self) -> Expr {
+        Expr::Case {
+            whens: self.whens,
+            else_expr: self.else_expr,
+        }
+    }
 }
 
 impl Expr {
@@ -266,6 +331,16 @@ impl Expr {
         }
     }
 
+    /// Starts a `CASE WHEN` chain.
+    ///
+    /// Add branches with [`CaseWhen::when`] and finalize with [`CaseWhen::end`].
+    pub fn case() -> CaseWhen {
+        CaseWhen {
+            whens: Vec::new(),
+            else_expr: None,
+        }
+    }
+
     /// Aliases this expression, `expr AS "alias"`.
     ///
     /// Used in a projection so the output column has a stable name to map onto a
@@ -313,6 +388,31 @@ impl Expr {
     /// `expr <= value`
     pub fn le(self, value: impl BindValue) -> Self {
         self.compare(BinaryOp::Le, value)
+    }
+
+    /// `expr + rhs`
+    pub fn add(self, rhs: Expr) -> Self {
+        Expr::binary(self, BinaryOp::Add, rhs)
+    }
+
+    /// `expr - rhs`
+    pub fn sub(self, rhs: Expr) -> Self {
+        Expr::binary(self, BinaryOp::Sub, rhs)
+    }
+
+    /// `expr * rhs`
+    pub fn mul(self, rhs: Expr) -> Self {
+        Expr::binary(self, BinaryOp::Mul, rhs)
+    }
+
+    /// `expr / rhs`
+    pub fn div(self, rhs: Expr) -> Self {
+        Expr::binary(self, BinaryOp::Div, rhs)
+    }
+
+    /// `expr % rhs`
+    pub fn rem(self, rhs: Expr) -> Self {
+        Expr::binary(self, BinaryOp::Mod, rhs)
     }
 
     /// Orders by this expression ascending.

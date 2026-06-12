@@ -10,7 +10,7 @@
 
 use std::marker::PhantomData;
 
-use crate::query::ast::{Join, OrderItem};
+use crate::query::ast::{Join, JoinKind, OrderItem};
 use crate::query::expr::Expr;
 
 /// The kind of association between two models.
@@ -119,9 +119,15 @@ impl<P, C> Relation<P, C> {
         &self.order_by
     }
 
-    /// Builds the join node for this relation.
+    /// Builds an inner join node for this relation.
     pub fn join_node(&self) -> Join {
+        self.join_node_with_kind(JoinKind::Inner)
+    }
+
+    /// Builds a join node with the given kind.
+    pub fn join_node_with_kind(&self, kind: JoinKind) -> Join {
         Join {
+            kind,
             table: self.to_table,
             left_table: self.from_table,
             left_column: self.from_column,

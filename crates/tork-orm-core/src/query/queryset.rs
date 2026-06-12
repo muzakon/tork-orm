@@ -11,7 +11,7 @@ use crate::dialect::{render_count, render_delete, render_exists, render_select, 
 use crate::error::OrmError;
 use crate::executor::Executor;
 use crate::model::{FromRow, Model};
-use crate::query::ast::{OrderItem, SelectItem, SelectStatement};
+use crate::query::ast::{JoinKind, OrderItem, SelectItem, SelectStatement};
 use crate::query::expr::Expr;
 use crate::query::write::{Assignment, DeleteStatement, UpdateStatement};
 
@@ -84,7 +84,7 @@ impl<M: Model> QuerySet<M> {
         self
     }
 
-    /// Joins a related table for filtering or aggregation.
+    /// Joins a related table for filtering or aggregation (`INNER JOIN`).
     ///
     /// The join does not load the related rows; use it to filter the queried
     /// model by columns on the related table. A `has_many` join can repeat parent
@@ -92,6 +92,19 @@ impl<M: Model> QuerySet<M> {
     /// Only a relation defined on `M` is accepted, so the join is type-checked.
     pub fn join<C>(mut self, relation: crate::relation::Relation<M, C>) -> Self {
         self.statement.joins.push(relation.join_node());
+        self
+    }
+
+    /// Left-joins a related table (`LEFT JOIN`).
+    ///
+    /// Unlike [`join`](Self::join), rows from `M` are included even when no
+    /// matching row exists on the related side. Unmatched columns from the
+    /// related table are `NULL`. Useful for optional relations such as computing
+    /// post counts for all users including those with zero posts.
+    pub fn left_join<C>(mut self, relation: crate::relation::Relation<M, C>) -> Self {
+        self.statement
+            .joins
+            .push(relation.join_node_with_kind(JoinKind::Left));
         self
     }
 

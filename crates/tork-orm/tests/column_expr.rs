@@ -1,7 +1,7 @@
 //! Tests for typed column expressions: the generated handles, the comparison and
 //! logical builders, and how they render to SQL with bound parameters.
 
-use tork_orm::dialect::{render_expr, SqliteDialect};
+use tork_orm::dialect::{render_expr, render_select, SqliteDialect};
 use tork_orm::prelude::*;
 
 #[derive(Debug, Clone, Model)]
@@ -206,4 +206,156 @@ fn not_in_string_slice() {
         params,
         vec![Value::Text("alice".into()), Value::Text("bob".into())]
     );
+}
+
+// ── ARITHMETIC ───────────────────────────────────────────────────────────────
+
+#[test]
+fn arithmetic_renders_correct_sql() {
+    let (sql, params) = render(&User::id.add(1_i64));
+    assert_eq!(sql, "\"users\".\"id\" + ?");
+    assert_eq!(params, vec![Value::Int(1)]);
+
+    let (sql, _) = render(&User::id.sub(5_i64));
+    assert_eq!(sql, "\"users\".\"id\" - ?");
+
+    let (sql, _) = render(&User::id.mul(2_i64));
+    assert_eq!(sql, "\"users\".\"id\" * ?");
+
+    let (sql, _) = render(&User::id.div(3_i64));
+    assert_eq!(sql, "\"users\".\"id\" / ?");
+
+    let (sql, _) = render(&User::id.rem(4_i64));
+    assert_eq!(sql, "\"users\".\"id\" % ?");
+}
+
+#[test]
+fn chained_arithmetic_on_expr() {
+    // (id * 2) + 1 — compose via Expr methods
+    let expr = User::id.mul(2_i64).add(Expr::value(Value::Int(1)));
+    let (sql, params) = render(&expr);
+    assert_eq!(sql, "\"users\".\"id\" * ? + ?");
+    assert_eq!(params, vec![Value::Int(2), Value::Int(1)]);
+}
+
+#[test]
+fn expr_arithmetic_with_two_columns() {
+    // Compose two column expressions without a literal bound value.
+    let expr = User::id.expr().add(User::id.expr());
+    let (sql, params) = render(&expr);
+    assert_eq!(sql, "\"users\".\"id\" + \"users\".\"id\"");
+    assert!(params.is_empty());
+}
+
+// ── CASE / WHEN ───────────────────────────────────────────────────────────────
+
+#[test]
+fn case_when_renders_all_branches() {
+    let expr = Expr::case()
+        .when(User::is_active.eq(true), Expr::value(Value::Text("active".into())))
+        .when(User::is_active.eq(false), Expr::value(Value::Text("inactive".into())))
+        .else_(Expr::value(Value::Text("unknown".into())))
+        .end();
+    let (sql, params) = render(&expr);
+    assert_eq!(
+        sql,
+        "CASE WHEN \"users\".\"is_active\" = ? THEN ? WHEN \"users\".\"is_active\" = ? THEN ? ELSE ? END"
+    );
+    assert_eq!(params.len(), 5);
+}
+
+#[test]
+fn case_when_without_else_omits_else_clause() {
+    let expr = Expr::case()
+        .when(User::is_active.eq(true), Expr::value(Value::Int(1)))
+        .end();
+    let (sql, _) = render(&expr);
+    assert_eq!(sql, "CASE WHEN \"users\".\"is_active\" = ? THEN ? END");
+    assert!(!sql.contains("ELSE"));
+}
+
+#[test]
+fn case_when_empty_has_no_branches() {
+    let expr = Expr::case().end();
+    let (sql, params) = render(&expr);
+    assert_eq!(sql, "CASE END");
+    assert!(params.is_empty());
+}
+
+// ── NULLS FIRST / LAST ────────────────────────────────────────────────────────
+
+#[test]
+fn nulls_last_appended_to_asc() {
+    let statement = User::query()
+        .order_by(User::id.asc().nulls_last())
+        .statement()
+        .clone();
+    let (sql, _) = render_select(&SqliteDialect::new(), &statement);
+    assert!(
+        sql.contains("ASC NULLS LAST"),
+        "expected ASC NULLS LAST in: {sql}"
+    );
+}
+
+#[test]
+fn nulls_first_appended_to_desc() {
+    let statement = User::query()
+        .order_by(User::id.desc().nulls_first())
+        .statement()
+        .clone();
+    let (sql, _) = render_select(&SqliteDialect::new(), &statement);
+    assert!(
+        sql.contains("DESC NULLS FIRST"),
+        "expected DESC NULLS FIRST in: {sql}"
+    );
+}
+
+#[test]
+fn no_nulls_directive_when_not_set() {
+    let statement = User::query()
+        .order_by(User::id.asc())
+        .statement()
+        .clone();
+    let (sql, _) = render_select(&SqliteDialect::new(), &statement);
+    assert!(
+        !sql.contains("NULLS"),
+        "should not contain NULLS clause by default: {sql}"
+    );
+}
+
+// ── STRING SUGAR ─────────────────────────────────────────────────────────────
+
+#[test]
+fn starts_with_generates_suffix_like_pattern() {
+    let (sql, params) = render(&User::username.starts_with("ali"));
+    assert_eq!(sql, "\"users\".\"username\" LIKE ?");
+    assert_eq!(params, vec![Value::Text("ali%".into())]);
+}
+
+#[test]
+fn ends_with_generates_prefix_like_pattern() {
+    let (sql, params) = render(&User::username.ends_with("ce"));
+    assert_eq!(sql, "\"users\".\"username\" LIKE ?");
+    assert_eq!(params, vec![Value::Text("%ce".into())]);
+}
+
+#[test]
+fn contains_wraps_pattern_in_percent() {
+    let (sql, params) = render(&User::username.contains("ali"));
+    assert_eq!(sql, "\"users\".\"username\" LIKE ?");
+    assert_eq!(params, vec![Value::Text("%ali%".into())]);
+}
+
+#[test]
+fn istarts_with_uses_ilike() {
+    let (sql, params) = render(&User::username.istarts_with("ALI"));
+    assert_eq!(sql, "lower(\"users\".\"username\") LIKE lower(?)");
+    assert_eq!(params, vec![Value::Text("ALI%".into())]);
+}
+
+#[test]
+fn icontains_uses_ilike() {
+    let (sql, params) = render(&User::username.icontains("ALICE"));
+    assert_eq!(sql, "lower(\"users\".\"username\") LIKE lower(?)");
+    assert_eq!(params, vec![Value::Text("%ALICE%".into())]);
 }

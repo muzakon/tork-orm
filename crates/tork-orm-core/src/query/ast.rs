@@ -20,11 +20,43 @@ pub enum SelectItem {
     Expression(Expr),
 }
 
-/// A join onto another table, `INNER JOIN "table" ON left = right`.
+/// The kind of join.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JoinKind {
+    /// `INNER JOIN` — only rows that match on both sides.
+    Inner,
+    /// `LEFT JOIN` — all left rows; NULLs on the right when no match.
+    Left,
+    /// `RIGHT JOIN` — all right rows; NULLs on the left when no match.
+    ///
+    /// Not supported by SQLite; available in the AST for future backends.
+    Right,
+    /// `FULL OUTER JOIN` — all rows from both sides with NULLs for mismatches.
+    ///
+    /// Not supported by SQLite; available in the AST for future backends.
+    Full,
+}
+
+impl JoinKind {
+    /// Returns the SQL keyword for this join kind.
+    pub fn as_sql(self) -> &'static str {
+        match self {
+            JoinKind::Inner => "INNER JOIN",
+            JoinKind::Left  => "LEFT JOIN",
+            JoinKind::Right => "RIGHT JOIN",
+            JoinKind::Full  => "FULL OUTER JOIN",
+        }
+    }
+}
+
+/// A join onto another table.
 ///
-/// This phase emits inner joins; the condition equates two qualified columns.
+/// The condition equates two qualified columns; the join kind controls which
+/// rows from each side are included.
 #[derive(Debug, Clone)]
 pub struct Join {
+    /// The kind of join.
+    pub kind: JoinKind,
     /// The table brought into the query.
     pub table: &'static str,
     /// The left side table of the `ON` condition.
@@ -44,12 +76,27 @@ pub struct OrderItem {
     pub expr: Expr,
     /// Whether to sort descending.
     pub descending: bool,
+    /// Where to place `NULL` values: `Some(true)` = `NULLS FIRST`,
+    /// `Some(false)` = `NULLS LAST`, `None` = database default.
+    pub nulls: Option<bool>,
 }
 
 impl OrderItem {
-    /// Builds an order term.
+    /// Builds an order term with the database's default NULL placement.
     pub fn new(expr: Expr, descending: bool) -> Self {
-        Self { expr, descending }
+        Self { expr, descending, nulls: None }
+    }
+
+    /// Places `NULL` values before non-null values (`NULLS FIRST`).
+    pub fn nulls_first(mut self) -> Self {
+        self.nulls = Some(true);
+        self
+    }
+
+    /// Places `NULL` values after non-null values (`NULLS LAST`).
+    pub fn nulls_last(mut self) -> Self {
+        self.nulls = Some(false);
+        self
     }
 }
 

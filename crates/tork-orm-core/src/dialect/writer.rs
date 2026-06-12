@@ -156,6 +156,20 @@ impl<'a> QueryWriter<'a> {
                 self.push_sql(" AS ");
                 self.push_identifier(alias);
             }
+            Expr::Case { whens, else_expr } => {
+                self.push_sql("CASE");
+                for (cond, result) in whens {
+                    self.push_sql(" WHEN ");
+                    self.write_expr(cond);
+                    self.push_sql(" THEN ");
+                    self.write_expr(result);
+                }
+                if let Some(default) = else_expr {
+                    self.push_sql(" ELSE ");
+                    self.write_expr(default);
+                }
+                self.push_sql(" END");
+            }
         }
     }
 
@@ -249,7 +263,9 @@ impl<'a> QueryWriter<'a> {
         self.push_sql(" FROM ");
         self.push_identifier(statement.table);
         for join in &statement.joins {
-            self.push_sql(" INNER JOIN ");
+            self.sql.push(' ');
+            self.push_sql(join.kind.as_sql());
+            self.sql.push(' ');
             self.push_identifier(join.table);
             self.push_sql(" ON ");
             self.push_qualified(join.left_table, join.left_column);
@@ -281,6 +297,9 @@ impl<'a> QueryWriter<'a> {
                 }
                 self.write_expr(&term.expr);
                 self.push_sql(if term.descending { " DESC" } else { " ASC" });
+                if let Some(nulls_first) = term.nulls {
+                    self.push_sql(if nulls_first { " NULLS FIRST" } else { " NULLS LAST" });
+                }
             }
         }
 
