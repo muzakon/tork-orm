@@ -116,3 +116,59 @@ assert_eq!(deleted, 1);
 let total_deleted = User::query().delete(&db).await?;
 println!("Deleted {} remaining users", total_deleted);
 ```
+
+---
+
+## 4. Upsert (Insert or Replace)
+
+`Model::upsert` inserts a row, replacing any existing row that conflicts on a unique key. It uses `INSERT OR REPLACE INTO` (SQLite) which deletes the conflicting row first and then inserts the new one.
+
+It returns the stored row, including any database-assigned columns (just like `create`).
+
+```rust
+// Insert "apple" the first time.
+let first = Product::upsert(&db, &Product { id: 0, name: "apple".into(), price: 1.50 }).await?;
+
+// Upsert the same name — the conflicting row is replaced.
+let updated = Product::upsert(&db, &Product { id: 0, name: "apple".into(), price: 1.99 }).await?;
+assert_eq!(updated.name, "apple");
+assert_eq!(updated.price, 1.99);
+```
+
+Because `INSERT OR REPLACE` deletes the conflicting row before inserting, auto-increment primary keys are re-assigned on replacement. If you need to preserve the original primary key, use `save()` after fetching the row.
+
+---
+
+## 5. RETURNING: Get Rows Back from Update and Delete
+
+### A. `update_returning`
+
+`update_returning` works like `update` but appends a `RETURNING` clause so the updated rows are returned as `Vec<M>` instead of a row count. All columns of `M` are returned.
+
+```rust
+// Deactivate users whose username is not "bob" and get them back.
+let deactivated: Vec<User> = User::query()
+    .filter(User::username.ne("bob"))
+    .update_returning(&db, [User::is_active.set(false)])
+    .await?;
+
+for user in &deactivated {
+    println!("{} was deactivated", user.username);
+}
+```
+
+### B. `delete_returning`
+
+`delete_returning` works like `delete` but returns the removed rows as `Vec<M>`. Useful for audit logging or soft-delete pipelines.
+
+```rust
+// Delete all inactive users and get their data before removal.
+let removed: Vec<User> = User::query()
+    .filter(User::is_active.eq(false))
+    .delete_returning(&db)
+    .await?;
+
+println!("Removed {} inactive accounts", removed.len());
+```
+
+Both methods require SQLite 3.35 or later (available in all recent releases of the bundled `rusqlite`).

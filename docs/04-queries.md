@@ -293,9 +293,19 @@ let stats = User::query()
 
 ---
 
-## 10. Outer Joins
+## 10. Joins
 
-`.join()` performs an `INNER JOIN` and drops any left-side rows that have no matching right-side row. `.left_join()` performs a `LEFT JOIN` and keeps every left-side row, filling the right-side columns with `NULL` when no match exists.
+The ORM exposes four join kinds. All except `cross_join` take a `Relation` argument so the join condition is inferred from the foreign key.
+
+| Method | SQL | When to use |
+|---|---|---|
+| `.join(rel)` | `INNER JOIN` | Only rows matched on both sides |
+| `.left_join(rel)` | `LEFT JOIN` | All left rows; unmatched right is `NULL` |
+| `.right_join(rel)` | `RIGHT JOIN` | All right rows; unmatched left is `NULL` |
+| `.full_join(rel)` | `FULL OUTER JOIN` | All rows from both sides |
+| `.cross_join::<C>()` | `CROSS JOIN` | Cartesian product; no `ON` condition |
+
+`RIGHT JOIN` and `FULL OUTER JOIN` require SQLite 3.39 or later. The AST supports them for forward compatibility.
 
 ```rust
 #[derive(QueryResult)]
@@ -318,10 +328,15 @@ let rows = User::query()
     .await?;
 // SQL: SELECT ... FROM "users" LEFT JOIN "posts" ON "users"."id" = "posts"."user_id"
 //      GROUP BY "users"."id", "users"."username"
-// A user with no posts appears with post_count = 0 (COUNT returns 0 for NULLs).
-```
 
-Use `.join()` when you only want rows that have at least one related record. Use `.left_join()` when you want all rows regardless of whether a related record exists.
+// Cartesian product: every size paired with every color.
+// cross_join takes a type parameter instead of a Relation.
+let pairs = Size::query()
+    .cross_join::<Color>()
+    .all(&db)
+    .await?;
+// SQL: SELECT ... FROM "sizes" CROSS JOIN "colors"
+```
 
 ---
 
@@ -664,3 +679,46 @@ Settings::query()
     .all(&db)
     .await?;
 ```
+
+---
+
+## 19. UNION / UNION ALL
+
+`.union(other)` combines the rows of two queries, removing duplicates. `.union_all(other)` preserves duplicates. Both return a `UnionQuery<M>` that supports `ORDER BY`, `LIMIT`, `OFFSET`, `all`, `first`, and `count`.
+
+```rust
+// Active users UNION inactive users — deduplicates (redundant here, but shows the API).
+let all_users = User::query()
+    .filter(User::is_active.eq(true))
+    .union(User::query().filter(User::is_active.eq(false)))
+    .all(&db)
+    .await?;
+// SQL: SELECT ... FROM "users" WHERE ... UNION SELECT ... FROM "users" WHERE ...
+
+// UNION ALL preserves every row, including duplicates.
+let with_dupes = User::query()
+    .filter(User::is_active.eq(true))
+    .union_all(User::query().filter(User::is_active.eq(true)))
+    .all(&db)
+    .await?;
+
+// Chain more than two branches.
+let three_way = User::query()
+    .filter(User::username.eq("alice"))
+    .union(User::query().filter(User::username.eq("bob")))
+    .union(User::query().filter(User::username.eq("carol")))
+    .order_by(User::id.asc())
+    .limit(2)
+    .all(&db)
+    .await?;
+// ORDER BY and LIMIT apply to the whole combined result.
+
+// COUNT wraps the union in a derived table.
+let total = User::query()
+    .filter(User::is_active.eq(true))
+    .union(User::query().filter(User::is_active.eq(false)))
+    .count(&db)
+    .await?;
+```
+
+The ORDER BY and LIMIT / OFFSET clauses on `UnionQuery` apply to the whole result, not to any individual branch. If you need to sort or limit inside a branch, build that `QuerySet` separately first.
