@@ -215,6 +215,13 @@ impl<'a> QueryWriter<'a> {
                 self.push_sql("EXCLUDED.");
                 self.push_identifier(column);
             }
+            Expr::Extract { field, source } => {
+                self.push_sql("EXTRACT(");
+                self.push_sql(field);
+                self.push_sql(" FROM ");
+                self.write_expr(source);
+                self.sql.push(')');
+            }
             Expr::Over { expr, window } => {
                 self.write_expr(expr);
                 self.push_sql(" OVER (");

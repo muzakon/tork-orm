@@ -55,15 +55,18 @@ pub use query::expr::{
     WindowFrameUnit,
 };
 pub use query::func::{
-    abs, ceil, coalesce, concat, cume_dist, dense_rank, first_value, floor, func, greatest,
+    abs, ceil, coalesce, concat, cume_dist, current_date, current_time, current_timestamp,
+    dense_rank, first_value, floor, func, greatest,
     lag, lag_default, lag_offset, last_value, lead, lead_default, lead_offset, least, length,
-    lower, ntile, nth_value, nullif, percent_rank, position, random_value, rank, replace,
+    lower, ntile, nth_value, nullif, now, percent_rank, position, random_value, rank, replace,
     round, row_number, substr, substr_len, trim, upper,
 };
 #[cfg(feature = "postgres")]
 pub use query::func::{
-    array_aggregation, bool_and, bool_or, json_aggregation, jsonb_aggregation, left,
+    age, array_aggregation, at_time_zone, bool_and, bool_or, date_trunc, json_aggregation,
+    jsonb_aggregation, left,
     regex_match, regex_replace, repeat, reverse, right, split_part, string_aggregation,
+    to_char,
 };
 pub use query::projection::{ExprTuple, IntoExpr, IntoSelectItem, Projection};
 pub use query::write::{Assignment, DeleteStatement, InsertStatement, OnConflict, UpdateStatement};

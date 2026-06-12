@@ -138,6 +138,90 @@ pub fn position(substring: &str, column: impl Into<Expr>) -> Expr {
 }
 
 // ---------------------------------------------------------------------------
+// Date / Time functions
+// ---------------------------------------------------------------------------
+
+/// `CURRENT_TIMESTAMP` — returns the current date and time at the session
+/// time zone.
+///
+/// Standard SQL. Use `.over().end()` to mark a window function call.
+pub fn current_timestamp() -> Expr {
+    Expr::raw("CURRENT_TIMESTAMP")
+}
+
+/// `CURRENT_DATE` — returns the current date at the session time zone.
+pub fn current_date() -> Expr {
+    Expr::raw("CURRENT_DATE")
+}
+
+/// `CURRENT_TIME` — returns the current time at the session time zone.
+pub fn current_time() -> Expr {
+    Expr::raw("CURRENT_TIME")
+}
+
+/// `NOW()` — returns the current date and time (equivalent to
+/// `CURRENT_TIMESTAMP`).
+pub fn now() -> Expr {
+    Expr::func("NOW", [] as [Expr; 0])
+}
+
+/// `EXTRACT(field FROM source)` — retrieves a sub-field such as `YEAR`,
+/// `MONTH`, `DAY`, `HOUR`, `MINUTE`, `SECOND` from a date/time expression.
+///
+/// Standard SQL. Available in SQLite and PostgreSQL alike.
+pub fn extract(field: &str, source: impl Into<Expr>) -> Expr {
+    Expr::Extract {
+        field: field.to_string(),
+        source: Box::new(source.into()),
+    }
+}
+
+/// `date_trunc(field, source)` — truncates a timestamp to the specified
+/// precision (`year`, `month`, `day`, `hour`, `minute`, `second`, etc.).
+///
+/// PostgreSQL-specific.
+#[cfg(feature = "postgres")]
+pub fn date_trunc(field: &str, source: impl Into<Expr>) -> Expr {
+    Expr::func("date_trunc", [
+        Expr::value(crate::value::Value::Text(field.to_string())),
+        source.into(),
+    ])
+}
+
+/// `AGE(end, start)` — computes `end - start` as an interval.
+///
+/// PostgreSQL-specific.
+#[cfg(feature = "postgres")]
+pub fn age(end: impl Into<Expr>, start: impl Into<Expr>) -> Expr {
+    Expr::func("AGE", [end.into(), start.into()])
+}
+
+/// `TO_CHAR(source, format)` — formats a timestamp according to the given
+/// format string.
+///
+/// Format patterns follow PostgreSQL's `to_char` conventions.
+///
+/// PostgreSQL-specific.
+#[cfg(feature = "postgres")]
+pub fn to_char(source: impl Into<Expr>, format: &str) -> Expr {
+    Expr::func("TO_CHAR", [
+        source.into(),
+        Expr::value(crate::value::Value::Text(format.to_string())),
+    ])
+}
+
+/// `timezone(zone, expr)` — converts a timestamp to the target time zone.
+///
+/// Equivalent to the `AT TIME ZONE` SQL syntax. PostgreSQL-specific.
+#[cfg(feature = "postgres")]
+pub fn at_time_zone(zone: &str, expr: impl Into<Expr>) -> Expr {
+    Expr::func("timezone", [
+        Expr::value(crate::value::Value::Text(zone.to_string())),
+        expr.into(),
+    ])
+}
+
+// ---------------------------------------------------------------------------
 // Window functions — pure functions designed for OVER()
 // ---------------------------------------------------------------------------
 

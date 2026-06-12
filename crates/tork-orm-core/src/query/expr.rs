@@ -457,6 +457,15 @@ pub enum Expr {
     /// A reference to a column of the `EXCLUDED` pseudo-table in an
     /// `ON CONFLICT ... DO UPDATE` clause (the would-be-inserted row).
     Excluded(&'static str),
+    /// `EXTRACT(field FROM source)` — extracts a sub-field from a date/time.
+    ///
+    /// Standard SQL. The `field` is a keyword like `YEAR`, `MONTH`, `DAY` etc.
+    Extract {
+        /// The sub-field keyword (e.g. `"YEAR"`, `"MONTH"`).
+        field: String,
+        /// The date/time expression.
+        source: Box<Expr>,
+    },
     /// A window function: `expr OVER (window_spec)`.
     ///
     /// The inner expression is typically an [`Aggregate`] or a [`Func`]. The
