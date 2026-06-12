@@ -268,10 +268,61 @@ impl<M: Model> QuerySet<M> {
         self.statement.joins.push(crate::query::ast::Join {
             kind: JoinKind::Cross,
             table: C::TABLE,
+            alias: None,
             left_table: "",
             left_column: "",
             right_table: "",
             right_column: "",
+        });
+        self
+    }
+
+    /// Joins this model's table to itself under `alias` with an `INNER JOIN`,
+    /// matching `base_column` on the base table against `alias_column` on the
+    /// aliased copy. Reference the aliased columns in filters and projections with
+    /// [`Expr::column`](crate::Expr::column)`(alias, "...")`.
+    ///
+    /// ```ignore
+    /// // Employees managed by "Alice".
+    /// Employee::query()
+    ///     .self_join("mgr", "manager_id", "id")
+    ///     .filter(Expr::column("mgr", "name").eq("Alice"))
+    /// ```
+    pub fn self_join(
+        self,
+        alias: &'static str,
+        base_column: &'static str,
+        alias_column: &'static str,
+    ) -> Self {
+        self.self_join_with_kind(JoinKind::Inner, alias, base_column, alias_column)
+    }
+
+    /// Like [`self_join`](Self::self_join) but with a `LEFT JOIN`, so base rows
+    /// without a matching aliased row are kept (the aliased columns read as `NULL`).
+    pub fn self_left_join(
+        self,
+        alias: &'static str,
+        base_column: &'static str,
+        alias_column: &'static str,
+    ) -> Self {
+        self.self_join_with_kind(JoinKind::Left, alias, base_column, alias_column)
+    }
+
+    fn self_join_with_kind(
+        mut self,
+        kind: JoinKind,
+        alias: &'static str,
+        base_column: &'static str,
+        alias_column: &'static str,
+    ) -> Self {
+        self.statement.joins.push(crate::query::ast::Join {
+            kind,
+            table: M::TABLE,
+            alias: Some(alias),
+            left_table: M::TABLE,
+            left_column: base_column,
+            right_table: alias,
+            right_column: alias_column,
         });
         self
     }

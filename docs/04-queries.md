@@ -998,3 +998,34 @@ let trashed = Note::query().only_deleted().all(&db).await?;
 ```
 
 `find` and `get_or_none` respect the default scope too, so a soft-deleted row is reported as not found unless you opt in with `with_deleted()`. The delete and restore operations are covered in [Writes](05-writes.md).
+
+## 29. Self-Joins
+
+`.self_join(alias, base_column, alias_column)` joins a model's table to itself under `alias`, which is what you need for self-referential data such as an `manager_id` tree. It matches `base_column` on the base table against `alias_column` on the aliased copy. Reference the aliased columns with `Expr::column(alias, "...")` in filters and projections.
+
+```rust
+// Employees whose manager is "Alice".
+let reports = Employee::query()
+    .self_join("mgr", "manager_id", "id")
+    .filter(Expr::column("mgr", "name").eq("Alice"))
+    .all(&db)
+    .await?;
+```
+
+Pair it with `select` to read columns from both copies into a projection (see [Aggregates and Projections](07-aggregates-and-projections.md)):
+
+```rust
+#[derive(QueryResult)]
+struct WithManager {
+    name: String,
+    manager_name: String,
+}
+
+let rows = Employee::query()
+    .self_join("mgr", "manager_id", "id")
+    .select((Employee::name, Expr::column("mgr", "name").as_("manager_name")))
+    .all_as::<WithManager>(&db)
+    .await?;
+```
+
+Use `.self_left_join(...)` instead to keep base rows that have no match (for example a top-level employee with no manager); the aliased columns then read as `NULL`.

@@ -64,6 +64,9 @@ pub struct Join {
     pub kind: JoinKind,
     /// The table brought into the query.
     pub table: &'static str,
+    /// An optional alias for the joined table (`JOIN table AS alias`), used to join
+    /// a table to itself. `None` renders the table name directly.
+    pub alias: Option<&'static str>,
     /// The left side table of the `ON` condition.
     pub left_table: &'static str,
     /// The left side column of the `ON` condition.

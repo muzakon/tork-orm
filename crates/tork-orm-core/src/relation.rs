@@ -129,6 +129,7 @@ impl<P, C> Relation<P, C> {
         Join {
             kind,
             table: self.to_table,
+            alias: None,
             left_table: self.from_table,
             left_column: self.from_column,
             right_table: self.to_table,

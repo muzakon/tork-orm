@@ -510,6 +510,10 @@ impl<'a> QueryWriter<'a> {
             self.push_sql(join.kind.as_sql());
             self.sql.push(' ');
             self.push_identifier(join.table);
+            if let Some(alias) = join.alias {
+                self.push_sql(" AS ");
+                self.push_identifier(alias);
+            }
             if join.kind != JoinKind::Cross {
                 self.push_sql(" ON ");
                 self.push_qualified(join.left_table, join.left_column);
