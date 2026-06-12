@@ -15,3 +15,16 @@ tokio = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true }
 serde_json = { workspace = true }
+
+# Project-level ORM configuration: the target dialect and migration tooling. The
+# declared dialect drives compile-time validation of models (an index feature the
+# dialect cannot support fails the build) and the migration file naming. Connection
+# settings (url, host, port, pool) deliberately live in application code, not here.
+[package.metadata.tork]
+dialect = "sqlite"
+
+[package.metadata.tork.migrations]
+dir                  = "migrations"
+file_template        = "{rev}_{slug}"
+revision_style       = "hash"
+truncate_slug_length = 40

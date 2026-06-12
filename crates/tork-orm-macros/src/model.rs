@@ -244,6 +244,52 @@ impl Parse for IndexFieldEntry {
     }
 }
 
+/// Reads the explicitly-declared dialect from the consuming crate's
+/// `[package.metadata.tork]`, or `None` when no dialect is declared.
+fn declared_dialect() -> Option<tork_orm_config::ConfigDialect> {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").ok()?;
+    tork_orm_config::TorkConfig::load(std::path::Path::new(&manifest_dir)).dialect
+}
+
+/// Rejects, at compile time, any declared index that uses a feature the declared
+/// dialect does not support. A no-op when no dialect is declared.
+fn validate_indexes_for_dialect(indexes: &[TableIndex]) -> syn::Result<()> {
+    let Some(dialect) = declared_dialect() else {
+        return Ok(());
+    };
+    for index in indexes {
+        let has_method = index.method.is_some();
+        let has_include = !index.include.is_empty();
+        let has_opclass = index.fields.iter().any(|field| field.opclass.is_some());
+        if let Some(feature) =
+            dialect.unsupported_index_feature(has_method, has_include, has_opclass)
+        {
+            // Point the error at the most relevant token where one is available.
+            let span = index
+                .method
+                .as_ref()
+                .map(LitStr::span)
+                .or_else(|| {
+                    index
+                        .fields
+                        .iter()
+                        .find_map(|field| field.opclass.as_ref().map(LitStr::span))
+                })
+                .or_else(|| index.include.first().map(Ident::span))
+                .unwrap_or_else(proc_macro2::Span::call_site);
+            return Err(syn::Error::new(
+                span,
+                format!(
+                    "{feature} is not supported by the `{}` dialect declared in \
+                     [package.metadata.tork]",
+                    dialect.as_str()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Parses one `asc`/`desc`/`nulls_first`/`nulls_last`/`opclass = ".."`/
 /// `collate = ".."` modifier into `entry`.
 fn parse_index_modifier(inner: ParseStream, entry: &mut IndexFieldEntry) -> syn::Result<()> {
@@ -403,6 +449,12 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             table_args = attr.parse_args()?;
         }
     }
+
+    // When the project explicitly declares a dialect, reject any index feature that
+    // dialect cannot support at compile time. With no declared dialect the model
+    // stays dialect-neutral (validated later at render time).
+    validate_indexes_for_dialect(&table_args.indexes)?;
+
     let table_name = table_args
         .name
         .map(|lit| lit.value())

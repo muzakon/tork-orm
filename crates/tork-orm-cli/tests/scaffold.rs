@@ -1,6 +1,8 @@
 //! Tests for the migration scaffolding helpers (pure, no filesystem).
 
-use tork_orm_cli::scaffold::{file_name, new_revision, snake_case, template};
+use tork_orm_cli::scaffold::{
+    new_revision, render_file_name, snake_case, template, DateParts,
+};
 
 #[test]
 fn snake_case_normalizes_names() {
@@ -18,8 +20,19 @@ fn revisions_are_unique_12_char_hex() {
 }
 
 #[test]
-fn file_name_combines_revision_and_name() {
-    assert_eq!(file_name("abc123def456", "add_orders"), "abc123def456_add_orders.sql");
+fn default_template_combines_revision_and_name() {
+    let date = DateParts {
+        year: "2026".into(),
+        month: "06".into(),
+        day: "12".into(),
+        hour: "00".into(),
+        minute: "00".into(),
+        second: "00".into(),
+    };
+    assert_eq!(
+        render_file_name("{rev}_{slug}", "abc123def456", "add_orders", &date),
+        "abc123def456_add_orders.sql"
+    );
 }
 
 #[test]

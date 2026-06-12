@@ -12,11 +12,19 @@ description = "Migration command-line runner for the Tork ORM."
 name = "tork-orm"
 path = "src/bin/tork-orm.rs"
 
+[features]
+default = []
+# Compile the live PostgreSQL driver so `tork-orm migrate ...` can target a
+# `postgres://` URL. Off by default to keep the standard binary lean.
+postgres = ["tork-orm/postgres"]
+
 [dependencies]
 tork-orm = { path = "../tork-orm", default-features = false, features = ["sqlite", "migrations"] }
+tork-orm-config = { workspace = true }
 tokio = { workspace = true }
 clap = { workspace = true }
 uuid = { workspace = true }
+time = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

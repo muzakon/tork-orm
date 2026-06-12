@@ -89,7 +89,9 @@ async fn dispatch(cli: &Cli, style: &Style) -> Result<(), OrmError> {
 
     // Scaffolding commands touch only the filesystem — no database needed.
     match command {
-        MigrateCommand::Create { name } => return commands::create::run(style, &config.dir, name),
+        MigrateCommand::Create { name } => {
+            return commands::create::run(style, &config.dir, &config.migrations, name)
+        }
         MigrateCommand::Init => return commands::init::run(style, &config.dir, cli.global.yes),
         _ => {}
     }
