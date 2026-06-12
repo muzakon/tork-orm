@@ -6,6 +6,7 @@
 //! [`Expr`], so a column, a value, or another function call all work.
 
 use crate::query::expr::Expr;
+use crate::Value;
 
 /// Builds a call to an arbitrary scalar function, `name(args...)`.
 ///
@@ -407,4 +408,90 @@ pub fn bool_and(column: impl Into<Expr>) -> Expr {
 #[cfg(feature = "postgres")]
 pub fn bool_or(column: impl Into<Expr>) -> Expr {
     Expr::aggregate(crate::query::expr::AggFunc::BoolOr, [column.into()])
+}
+
+// ---------------------------------------------------------------------------
+// Full-text search (PostgreSQL)
+// ---------------------------------------------------------------------------
+
+/// `to_tsvector(config, text)` — converts plain text into a `tsvector`
+/// for full-text search.
+///
+/// # Examples
+///
+/// ```
+/// # #[cfg(feature = "postgres")] {
+/// use tork_orm_core::query::func::{to_tsvector, to_tsquery};
+/// use tork_orm_core::query::expr::Expr;
+///
+/// let v = to_tsvector("english", Expr::column("articles", "body"));
+/// let q = to_tsquery("english", Expr::value(tork_orm_core::Value::Text("search & terms".into())));
+/// # let _ = v;
+/// # let _ = q;
+/// # }
+/// ```
+#[cfg(feature = "postgres")]
+pub fn to_tsvector(config: &str, text: impl Into<Expr>) -> Expr {
+    Expr::func("to_tsvector", [Expr::value(Value::Text(config.to_string())), text.into()])
+}
+
+/// `to_tsvector_simple(text)` — `to_tsvector('simple', text)` shorthand.
+#[cfg(feature = "postgres")]
+pub fn to_tsvector_simple(text: impl Into<Expr>) -> Expr {
+    to_tsvector("simple", text)
+}
+
+/// `to_tsquery(config, query)` — parses a lexeme-based query into a `tsquery`.
+#[cfg(feature = "postgres")]
+pub fn to_tsquery(config: &str, query_text: impl Into<Expr>) -> Expr {
+    Expr::func("to_tsquery", [Expr::value(Value::Text(config.to_string())), query_text.into()])
+}
+
+/// `plainto_tsquery(config, query)` — parses plain text into a `tsquery`
+/// (automatically adds AND between terms).
+#[cfg(feature = "postgres")]
+pub fn plainto_tsquery(config: &str, query_text: impl Into<Expr>) -> Expr {
+    Expr::func("plainto_tsquery", [Expr::value(Value::Text(config.to_string())), query_text.into()])
+}
+
+/// `phraseto_tsquery(config, query)` — parses phrase text into a `tsquery`
+/// (terms must appear consecutively).
+#[cfg(feature = "postgres")]
+pub fn phraseto_tsquery(config: &str, query_text: impl Into<Expr>) -> Expr {
+    Expr::func("phraseto_tsquery", [Expr::value(Value::Text(config.to_string())), query_text.into()])
+}
+
+/// `ts_rank(vector, query)` — ranks documents by relevance.
+#[cfg(feature = "postgres")]
+pub fn ts_rank(vector: impl Into<Expr>, query: impl Into<Expr>) -> Expr {
+    Expr::func("ts_rank", [vector.into(), query.into()])
+}
+
+/// `ts_rank_cd(vector, query)` — ranks documents using coverage density.
+#[cfg(feature = "postgres")]
+pub fn ts_rank_cd(vector: impl Into<Expr>, query: impl Into<Expr>) -> Expr {
+    Expr::func("ts_rank_cd", [vector.into(), query.into()])
+}
+
+/// `ts_headline(config, text, query)` — generates a highlighted excerpt.
+#[cfg(feature = "postgres")]
+pub fn ts_headline(
+    config: &str,
+    text: impl Into<Expr>,
+    query: impl Into<Expr>,
+) -> Expr {
+    Expr::func(
+        "ts_headline",
+        [
+            Expr::value(Value::Text(config.to_string())),
+            text.into(),
+            query.into(),
+        ],
+    )
+}
+
+/// `tsquery(query_text)` — casts a string literal to `tsquery`.
+#[cfg(feature = "postgres")]
+pub fn tsquery(query_text: &str) -> Expr {
+    Expr::func("tsquery", [Expr::value(Value::Text(query_text.to_string()))])
 }

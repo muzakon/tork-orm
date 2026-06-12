@@ -274,6 +274,8 @@ pub enum BinaryOp {
     JsonPathText,
     /// `<@` — left is contained by right (PostgreSQL array).
     ArrayContainedBy,
+    /// `@@` — `tsvector @@ tsquery` full-text search match (PostgreSQL).
+    TsMatch,
 }
 
 impl BinaryOp {
@@ -305,6 +307,7 @@ impl BinaryOp {
             BinaryOp::JsonPath => "#>",
             BinaryOp::JsonPathText => "#>>",
             BinaryOp::ArrayContainedBy => "<@",
+            BinaryOp::TsMatch => "@@",
         }
     }
 }
@@ -824,6 +827,32 @@ impl Expr {
     /// `expr % rhs`
     pub fn rem(self, rhs: Expr) -> Self {
         Expr::binary(self, BinaryOp::Mod, rhs)
+    }
+
+    /// `expr @@ query` — full-text search match (PostgreSQL `tsvector @@ tsquery`).
+    #[cfg(feature = "postgres")]
+    pub fn matches(self, query: impl Into<Expr>) -> Expr {
+        Expr::binary(self, BinaryOp::TsMatch, query.into())
+    }
+
+    /// `to_tsvector(config, self)` shorthand on an expression.
+    #[cfg(feature = "postgres")]
+    pub fn to_tsvector(self, config: &str) -> Expr {
+        Expr::func("to_tsvector", [Expr::value(Value::Text(config.to_string())), self])
+    }
+
+    /// `tsvector @@ to_tsquery(config, query)` — shorthand for text-vs-text matching.
+    #[cfg(feature = "postgres")]
+    pub fn ts_match(self, config: &str, query_text: &str) -> Expr {
+        let vector = self.to_tsvector(config);
+        let query = Expr::func(
+            "to_tsquery",
+            [
+                Expr::value(Value::Text(config.to_string())),
+                Expr::value(Value::Text(query_text.to_string())),
+            ],
+        );
+        Expr::binary(vector, BinaryOp::TsMatch, query)
     }
 
     /// Orders by this expression ascending.

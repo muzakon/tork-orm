@@ -64,9 +64,9 @@ pub use query::func::{
 #[cfg(feature = "postgres")]
 pub use query::func::{
     age, array_aggregation, at_time_zone, bool_and, bool_or, date_trunc, json_aggregation,
-    jsonb_aggregation, left,
-    regex_match, regex_replace, repeat, reverse, right, split_part, string_aggregation,
-    to_char,
+    jsonb_aggregation, left, phraseto_tsquery, plainto_tsquery, regex_match, regex_replace,
+    repeat, reverse, right, split_part, string_aggregation, to_char, to_tsquery, to_tsvector,
+    to_tsvector_simple, ts_headline, ts_rank, ts_rank_cd, tsquery,
 };
 pub use query::projection::{ExprTuple, IntoExpr, IntoSelectItem, Projection};
 pub use query::write::{Assignment, DeleteStatement, InsertStatement, OnConflict, UpdateStatement};

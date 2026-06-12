@@ -167,36 +167,6 @@ fn random_value_renders() {
 // ── REGEX / SPLIT / REPLACE FREE FUNCTIONS ────────────────────────────────────
 
 #[test]
-fn regex_match_free_function() {
-    let dialect = SqliteDialect::new();
-    let expr = regex_match(User::email, "^admin@");
-    assert_eq!(
-        predicate_sql(&dialect, &expr),
-        "regexp_like(\"users\".\"email\", '^admin@')"
-    );
-}
-
-#[test]
-fn regex_replace_free_function() {
-    let dialect = SqliteDialect::new();
-    let expr = regex_replace(User::email, "@old\\.com", "@new.com");
-    assert_eq!(
-        predicate_sql(&dialect, &expr),
-        "regexp_replace(\"users\".\"email\", '@old\\.com', '@new.com')"
-    );
-}
-
-#[test]
-fn split_part_free_function() {
-    let dialect = SqliteDialect::new();
-    let expr = split_part(User::email, "@", 2);
-    assert_eq!(
-        predicate_sql(&dialect, &expr),
-        "split_part(\"users\".\"email\", '@', 2)"
-    );
-}
-
-#[test]
 fn replace_free_function() {
     let dialect = SqliteDialect::new();
     let expr = replace(User::email, "example", "test");
@@ -207,12 +177,57 @@ fn replace_free_function() {
 }
 
 #[test]
+fn position_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = position("@", User::email);
+    assert_eq!(predicate_sql(&dialect, &expr), "position('@', \"users\".\"email\")");
+}
+
+// ── POSTGRES-SPECIFIC FREE FUNCTIONS ──────────────────────────────────────────
+// These functions are only available when the `postgres` feature is enabled.
+
+#[cfg(feature = "postgres")]
+#[test]
+fn regex_match_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = regex_match(User::email, "^admin@");
+    assert_eq!(
+        predicate_sql(&dialect, &expr),
+        "regexp_like(\"users\".\"email\", '^admin@')"
+    );
+}
+
+#[cfg(feature = "postgres")]
+#[test]
+fn regex_replace_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = regex_replace(User::email, "@old\\.com", "@new.com");
+    assert_eq!(
+        predicate_sql(&dialect, &expr),
+        "regexp_replace(\"users\".\"email\", '@old\\.com', '@new.com')"
+    );
+}
+
+#[cfg(feature = "postgres")]
+#[test]
+fn split_part_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = split_part(User::email, "@", 2);
+    assert_eq!(
+        predicate_sql(&dialect, &expr),
+        "split_part(\"users\".\"email\", '@', 2)"
+    );
+}
+
+#[cfg(feature = "postgres")]
+#[test]
 fn left_free_function() {
     let dialect = SqliteDialect::new();
     let expr = left(User::email, 3);
     assert_eq!(predicate_sql(&dialect, &expr), "left(\"users\".\"email\", 3)");
 }
 
+#[cfg(feature = "postgres")]
 #[test]
 fn right_free_function() {
     let dialect = SqliteDialect::new();
@@ -220,6 +235,7 @@ fn right_free_function() {
     assert_eq!(predicate_sql(&dialect, &expr), "right(\"users\".\"email\", 5)");
 }
 
+#[cfg(feature = "postgres")]
 #[test]
 fn repeat_free_function() {
     let dialect = SqliteDialect::new();
@@ -227,6 +243,7 @@ fn repeat_free_function() {
     assert_eq!(predicate_sql(&dialect, &expr), "repeat(\"users\".\"email\", 2)");
 }
 
+#[cfg(feature = "postgres")]
 #[test]
 fn reverse_free_function() {
     let dialect = SqliteDialect::new();
@@ -234,15 +251,9 @@ fn reverse_free_function() {
     assert_eq!(predicate_sql(&dialect, &expr), "reverse(\"users\".\"email\")");
 }
 
-#[test]
-fn position_free_function() {
-    let dialect = SqliteDialect::new();
-    let expr = position("@", User::email);
-    assert_eq!(predicate_sql(&dialect, &expr), "position('@', \"users\".\"email\")");
-}
+// ── AGGREGATE FREE FUNCTIONS (PostgreSQL-specific) ────────────────────────────
 
-// ── AGGREGATE FREE FUNCTIONS ──────────────────────────────────────────────────
-
+#[cfg(feature = "postgres")]
 #[test]
 fn string_aggregation_free_function() {
     let dialect = SqliteDialect::new();
@@ -253,6 +264,7 @@ fn string_aggregation_free_function() {
     );
 }
 
+#[cfg(feature = "postgres")]
 #[test]
 fn array_aggregation_free_function() {
     let dialect = SqliteDialect::new();
@@ -260,6 +272,7 @@ fn array_aggregation_free_function() {
     assert_eq!(predicate_sql(&dialect, &expr), "array_agg(\"users\".\"id\")");
 }
 
+#[cfg(feature = "postgres")]
 #[test]
 fn json_aggregation_free_function() {
     let dialect = SqliteDialect::new();
@@ -270,6 +283,7 @@ fn json_aggregation_free_function() {
     );
 }
 
+#[cfg(feature = "postgres")]
 #[test]
 fn jsonb_aggregation_free_function() {
     let dialect = SqliteDialect::new();
@@ -280,6 +294,7 @@ fn jsonb_aggregation_free_function() {
     );
 }
 
+#[cfg(feature = "postgres")]
 #[test]
 fn bool_and_free_function() {
     #[derive(Debug, Clone, Model)]
@@ -294,6 +309,7 @@ fn bool_and_free_function() {
     assert_eq!(predicate_sql(&dialect, &expr), "bool_and(\"flags\".\"active\")");
 }
 
+#[cfg(feature = "postgres")]
 #[test]
 fn bool_or_free_function() {
     #[derive(Debug, Clone, Model)]

@@ -317,14 +317,21 @@ impl<M, T> Column<M, T> {
         )
     }
 
+    /// Builds a binary comparison against a bound value.
+    fn compare<V: IntoSqlValue<T>>(self, op: BinaryOp, value: V) -> Expr {
+        Expr::binary(self.expr(), op, Expr::value(value.into_sql_value()))
+    }
+}
+
+/// PostgreSQL-specific aggregate helpers on any column.
+///
+/// These are only available when the `postgres` feature is enabled. The
+/// underlying SQL functions (`string_agg`, `array_agg`, `json_agg`, `jsonb_agg`)
+/// are PostgreSQL-specific.
+#[cfg(feature = "postgres")]
+impl<M, T: crate::value::BindValue> Column<M, T> {
     /// `string_agg(column, delimiter)` — concatenates non-null values with a delimiter.
-    ///
-    /// Only available for `String` columns; use the free function version for other
-    /// types.
-    pub fn string_aggregation(self, delimiter: &str) -> Expr
-    where
-        T: crate::value::BindValue,
-    {
+    pub fn string_aggregation(self, delimiter: &str) -> Expr {
         Expr::aggregate(AggFunc::StringAggregation, [
             self.expr(),
             Expr::value(Value::Text(delimiter.to_string())),
@@ -332,32 +339,18 @@ impl<M, T> Column<M, T> {
     }
 
     /// `array_agg(column)` — collects values into a PostgreSQL array.
-    pub fn array_aggregation(self) -> Expr
-    where
-        T: crate::value::BindValue,
-    {
+    pub fn array_aggregation(self) -> Expr {
         Expr::aggregate(AggFunc::ArrayAggregation, [self.expr()])
     }
 
     /// `json_agg(column)` — aggregates values as a JSON array.
-    pub fn json_aggregation(self) -> Expr
-    where
-        T: crate::value::BindValue,
-    {
+    pub fn json_aggregation(self) -> Expr {
         Expr::aggregate(AggFunc::JsonAggregation, [self.expr()])
     }
 
     /// `jsonb_agg(column)` — aggregates values as a JSONB array.
-    pub fn jsonb_aggregation(self) -> Expr
-    where
-        T: crate::value::BindValue,
-    {
+    pub fn jsonb_aggregation(self) -> Expr {
         Expr::aggregate(AggFunc::JsonbAggregation, [self.expr()])
-    }
-
-    /// Builds a binary comparison against a bound value.
-    fn compare<V: IntoSqlValue<T>>(self, op: BinaryOp, value: V) -> Expr {
-        Expr::binary(self.expr(), op, Expr::value(value.into_sql_value()))
     }
 }
 
@@ -502,6 +495,33 @@ impl<M> Column<M, String> {
         )
     }
 
+    /// `position(substring IN column)` — returns the position of the first occurrence.
+    pub fn position(self, substring: &str) -> Expr {
+        Expr::func("position", [
+            Expr::value(Value::Text(substring.to_string())),
+            self.expr(),
+        ])
+    }
+
+    /// `replace(column, from, to)` — replaces all occurrences of `from` with `to`.
+    ///
+    /// SQL-standard function, available in SQLite and PostgreSQL alike.
+    pub fn replace(self, from: &str, to: &str) -> Expr {
+        Expr::func("replace", [
+            self.expr(),
+            Expr::value(Value::Text(from.to_string())),
+            Expr::value(Value::Text(to.to_string())),
+        ])
+    }
+}
+
+/// PostgreSQL-specific string functions.
+///
+/// These functions (`regexp_like`, `regexp_replace`, `split_part`, `left`,
+/// `right`, `repeat`, `reverse`) are PostgreSQL-specific. Only available when
+/// the `postgres` feature is enabled.
+#[cfg(feature = "postgres")]
+impl<M> Column<M, String> {
     /// `regexp_like(column, pattern)` — tests whether the column matches the regex pattern.
     pub fn regex_match(self, pattern: &str) -> Expr {
         Expr::func("regexp_like", [self.expr(), Expr::value(Value::Text(pattern.to_string()))])
@@ -526,15 +546,6 @@ impl<M> Column<M, String> {
         ])
     }
 
-    /// `replace(column, from, to)` — replaces all occurrences of `from` with `to`.
-    pub fn replace(self, from: &str, to: &str) -> Expr {
-        Expr::func("replace", [
-            self.expr(),
-            Expr::value(Value::Text(from.to_string())),
-            Expr::value(Value::Text(to.to_string())),
-        ])
-    }
-
     /// `left(column, n)` — returns the first `n` characters.
     pub fn left(self, n: i64) -> Expr {
         Expr::func("left", [self.expr(), Expr::value(Value::Int(n))])
@@ -554,17 +565,13 @@ impl<M> Column<M, String> {
     pub fn reverse(self) -> Expr {
         Expr::func("reverse", [self.expr()])
     }
-
-    /// `position(substring IN column)` — returns the position of the first occurrence.
-    pub fn position(self, substring: &str) -> Expr {
-        Expr::func("position", [
-            Expr::value(Value::Text(substring.to_string())),
-            self.expr(),
-        ])
-    }
 }
 
-/// Boolean column operations — additional aggregates.
+/// PostgreSQL-specific boolean aggregates.
+///
+/// `bool_and` and `bool_or` are PostgreSQL-specific. Only available when the
+/// `postgres` feature is enabled.
+#[cfg(feature = "postgres")]
 impl<M> Column<M, bool> {
     /// `bool_and(column)` — true if every non-null value is true.
     pub fn bool_and(self) -> Expr {

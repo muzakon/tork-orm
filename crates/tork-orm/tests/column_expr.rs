@@ -515,8 +515,9 @@ fn aggregate_without_filter_omits_clause() {
     assert!(!sql.contains("FILTER"), "unexpected FILTER clause in: {sql}");
 }
 
-// ── STRING AGGREGATION ───────────────────────────────────────────────────────
+// ── AGGREGATE COLUMN SUGAR (PostgreSQL-specific) ─────────────────────────────
 
+#[cfg(feature = "postgres")]
 #[test]
 fn string_aggregation_column_sugar() {
     let expr = User::username.string_aggregation(", ");
@@ -528,6 +529,7 @@ fn string_aggregation_column_sugar() {
     assert_eq!(params, vec![Value::Text(", ".into())]);
 }
 
+#[cfg(feature = "postgres")]
 #[test]
 fn array_aggregation_column_sugar() {
     let expr = User::id.array_aggregation();
@@ -535,6 +537,7 @@ fn array_aggregation_column_sugar() {
     assert_eq!(sql, "array_agg(\"users\".\"id\")");
 }
 
+#[cfg(feature = "postgres")]
 #[test]
 fn json_aggregation_column_sugar() {
     let expr = User::username.json_aggregation();
@@ -542,6 +545,7 @@ fn json_aggregation_column_sugar() {
     assert_eq!(sql, "json_agg(\"users\".\"username\")");
 }
 
+#[cfg(feature = "postgres")]
 #[test]
 fn jsonb_aggregation_column_sugar() {
     let expr = User::username.jsonb_aggregation();
@@ -549,14 +553,14 @@ fn jsonb_aggregation_column_sugar() {
     assert_eq!(sql, "jsonb_agg(\"users\".\"username\")");
 }
 
-// ── BOOL AND / OR ────────────────────────────────────────────────────────────
-
+#[cfg(feature = "postgres")]
 #[test]
 fn bool_and_column_sugar() {
     let (sql, _) = render(&User::is_active.bool_and());
     assert_eq!(sql, "bool_and(\"users\".\"is_active\")");
 }
 
+#[cfg(feature = "postgres")]
 #[test]
 fn bool_or_column_sugar() {
     let (sql, _) = render(&User::is_active.bool_or());
@@ -627,6 +631,7 @@ fn json_path_text_renders_hash_gt_gt() {
 
 // ── STRING REGEX / SPLIT / REPLACE ───────────────────────────────────────────
 
+#[cfg(feature = "postgres")]
 #[test]
 fn regex_match_column_sugar() {
     let (sql, params) = render(&User::username.regex_match("^a.*"));
@@ -634,6 +639,7 @@ fn regex_match_column_sugar() {
     assert_eq!(params, vec![Value::Text("^a.*".into())]);
 }
 
+#[cfg(feature = "postgres")]
 #[test]
 fn regex_replace_column_sugar() {
     let (sql, params) = render(&User::email.regex_replace("@example\\.com", "@test.com"));
@@ -644,6 +650,7 @@ fn regex_replace_column_sugar() {
     ]);
 }
 
+#[cfg(feature = "postgres")]
 #[test]
 fn split_part_column_sugar() {
     let (sql, params) = render(&User::email.split_part("@", 2));
@@ -667,6 +674,7 @@ fn replace_column_sugar() {
     ]);
 }
 
+#[cfg(feature = "postgres")]
 #[test]
 fn left_column_sugar() {
     let (sql, params) = render(&User::username.left(3));
@@ -674,6 +682,7 @@ fn left_column_sugar() {
     assert_eq!(params, vec![Value::Int(3)]);
 }
 
+#[cfg(feature = "postgres")]
 #[test]
 fn right_column_sugar() {
     let (sql, params) = render(&User::username.right(5));
@@ -681,6 +690,7 @@ fn right_column_sugar() {
     assert_eq!(params, vec![Value::Int(5)]);
 }
 
+#[cfg(feature = "postgres")]
 #[test]
 fn repeat_column_sugar() {
     let (sql, params) = render(&User::username.repeat(2));
@@ -688,6 +698,7 @@ fn repeat_column_sugar() {
     assert_eq!(params, vec![Value::Int(2)]);
 }
 
+#[cfg(feature = "postgres")]
 #[test]
 fn reverse_column_sugar() {
     let (sql, _) = render(&User::username.reverse());
