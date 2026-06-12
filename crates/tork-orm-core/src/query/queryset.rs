@@ -173,6 +173,37 @@ impl<M: Model> QuerySet<M> {
         &self.statement
     }
 
+    /// Consumes this query set and returns the underlying statement.
+    ///
+    /// Primarily used internally to build subquery expressions. For most cases,
+    /// prefer [`to_subquery`](Self::to_subquery) which wraps the result.
+    pub fn into_statement(self) -> SelectStatement {
+        self.statement
+    }
+
+    /// Converts this query into a scalar subquery expression `(SELECT ...)`.
+    ///
+    /// The result can be used in any expression position: a comparison, a
+    /// projection, or a `HAVING` clause. For `IN (SELECT ...)` tests use
+    /// [`Column::in_subquery`](crate::Column::in_subquery).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Scalar: posts with above-average view count
+    /// let avg = Post::query()
+    ///     .select(Post::view_count.avg().as_("avg"))
+    ///     .to_subquery();
+    ///
+    /// let popular = Post::query()
+    ///     .filter(Expr::binary(Post::view_count.expr(), BinaryOp::Gt, avg))
+    ///     .all(&db)
+    ///     .await?;
+    /// ```
+    pub fn to_subquery(self) -> crate::query::expr::Expr {
+        crate::query::expr::Expr::subquery(self.statement)
+    }
+
     /// Runs the query and returns every matching row as `M`.
     pub async fn all(self, executor: impl Executor) -> crate::Result<Vec<M>> {
         self.all_as::<M>(executor).await

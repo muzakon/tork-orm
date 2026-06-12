@@ -5,7 +5,7 @@
 //! of bound parameters by a [`Dialect`](crate::dialect::Dialect). Keeping the AST
 //! backend-neutral is what lets one set of queries target any dialect.
 
-use crate::query::ast::OrderItem;
+use crate::query::ast::{OrderItem, SelectStatement};
 use crate::value::{BindValue, Value};
 
 /// An aggregate function applied to an expression.
@@ -193,6 +193,22 @@ pub enum Expr {
         /// The fallback expression when no condition matches.
         else_expr: Option<Box<Expr>>,
     },
+    /// A scalar subquery — `(SELECT ...)`.
+    ///
+    /// Can appear anywhere an expression is expected: comparisons, projections,
+    /// `HAVING` clauses. The caller is responsible for ensuring the subquery
+    /// returns at most one row and one column.
+    Subquery(Box<SelectStatement>),
+    /// A membership test against a subquery — `col IN (SELECT ...)` or
+    /// `col NOT IN (SELECT ...)`.
+    InSubquery {
+        /// The expression to test.
+        expr: Box<Expr>,
+        /// The subquery that produces candidate values.
+        subquery: Box<SelectStatement>,
+        /// Whether the test is negated (`NOT IN`).
+        negated: bool,
+    },
 }
 
 /// Builder for a `CASE WHEN` expression.
@@ -338,6 +354,26 @@ impl Expr {
         CaseWhen {
             whens: Vec::new(),
             else_expr: None,
+        }
+    }
+
+    /// Wraps a `SelectStatement` into a scalar subquery expression `(SELECT ...)`.
+    ///
+    /// The returned expression can appear anywhere an expression is valid. The
+    /// most common way to build the statement is via [`QuerySet::to_subquery`].
+    pub fn subquery(stmt: SelectStatement) -> Self {
+        Expr::Subquery(Box::new(stmt))
+    }
+
+    /// Builds a `col IN (SELECT ...)` or `col NOT IN (SELECT ...)` test.
+    ///
+    /// Prefer the typed [`Column::in_subquery`] and [`Column::not_in_subquery`]
+    /// helpers over this constructor when a typed column is available.
+    pub fn in_subquery(expr: Expr, stmt: SelectStatement, negated: bool) -> Self {
+        Expr::InSubquery {
+            expr: Box::new(expr),
+            subquery: Box::new(stmt),
+            negated,
         }
     }
 

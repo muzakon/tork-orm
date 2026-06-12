@@ -359,3 +359,46 @@ fn icontains_uses_ilike() {
     assert_eq!(sql, "lower(\"users\".\"username\") LIKE lower(?)");
     assert_eq!(params, vec![Value::Text("%ALICE%".into())]);
 }
+
+// ── SUBQUERIES ────────────────────────────────────────────────────────────────
+
+#[test]
+fn in_subquery_renders_select_inline() {
+    let subq = User::query()
+        .filter(User::is_active.eq(true))
+        .select((User::id,))
+        .to_subquery();
+    let outer = User::id.in_subquery(
+        User::query().filter(User::is_active.eq(true)).select((User::id,)),
+    );
+    let (sql, _) = render(&outer);
+    assert!(
+        sql.contains("IN (SELECT"),
+        "expected IN (SELECT in: {sql}"
+    );
+    assert!(sql.contains("\"users\".\"id\""), "expected column ref in: {sql}");
+    // The scalar subquery form also renders correctly
+    let (subq_sql, _) = render(&subq);
+    assert!(subq_sql.starts_with("(SELECT"), "expected (SELECT: {subq_sql}");
+}
+
+#[test]
+fn not_in_subquery_renders_not_in() {
+    let outer = User::id.not_in_subquery(
+        User::query().filter(User::is_active.eq(false)).select((User::id,)),
+    );
+    let (sql, _) = render(&outer);
+    assert!(
+        sql.contains("NOT IN (SELECT"),
+        "expected NOT IN (SELECT in: {sql}"
+    );
+}
+
+#[test]
+fn scalar_subquery_renders_parenthesized_select() {
+    let stmt = User::query().filter(User::is_active.eq(true)).select((User::id,)).statement().clone();
+    let subq = Expr::subquery(stmt);
+    let (sql, _) = render(&subq);
+    assert!(sql.starts_with("(SELECT"), "expected (SELECT: {sql}");
+    assert!(sql.ends_with(')'), "expected closing paren: {sql}");
+}

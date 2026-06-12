@@ -329,3 +329,44 @@ async fn not_in_empty_list_matches_all_rows() {
         .unwrap();
     assert_eq!(users, 4);
 }
+
+// ── SUBQUERIES ────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn in_subquery_filters_rows_at_runtime() {
+    let db = seed().await;
+    // Seeded: alice (active), bob (inactive), carol (active), dave (active).
+    // The subquery selects the ids of all active users; the outer query fetches
+    // users whose id appears in that set — so bob should be excluded.
+    let users = User::query()
+        .filter(User::id.in_subquery(
+            User::query()
+                .filter(User::is_active.eq(true))
+                .select((User::id,)),
+        ))
+        .order_by(User::id.asc())
+        .all(&db)
+        .await
+        .unwrap();
+    assert_eq!(users.len(), 3);
+    assert!(users.iter().all(|u| u.is_active));
+    assert!(users.iter().all(|u| u.username != "bob"));
+}
+
+#[tokio::test]
+async fn not_in_subquery_filters_rows_at_runtime() {
+    let db = seed().await;
+    // Excludes rows whose id is in the inactive-user subquery — so only bob should be excluded.
+    let users = User::query()
+        .filter(User::id.not_in_subquery(
+            User::query()
+                .filter(User::is_active.eq(false))
+                .select((User::id,)),
+        ))
+        .order_by(User::id.asc())
+        .all(&db)
+        .await
+        .unwrap();
+    assert_eq!(users.len(), 3);
+    assert!(users.iter().all(|u| u.username != "bob"));
+}

@@ -170,6 +170,17 @@ impl<'a> QueryWriter<'a> {
                 }
                 self.push_sql(" END");
             }
+            Expr::Subquery(stmt) => {
+                self.sql.push('(');
+                self.write_select(stmt);
+                self.sql.push(')');
+            }
+            Expr::InSubquery { expr, subquery, negated } => {
+                self.write_expr(expr);
+                self.push_sql(if *negated { " NOT IN (" } else { " IN (" });
+                self.write_select(subquery);
+                self.sql.push(')');
+            }
         }
     }
 

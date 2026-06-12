@@ -10,6 +10,7 @@ use std::marker::PhantomData;
 
 use crate::query::ast::OrderItem;
 use crate::query::expr::{AggFunc, BinaryOp, Expr};
+use crate::query::queryset::QuerySet;
 use crate::query::write::Assignment;
 use crate::value::{BindValue, Value};
 
@@ -193,6 +194,29 @@ impl<M, T> Column<M, T> {
         I: IntoIterator<Item = V>,
     {
         Expr::not(self.in_list(values))
+    }
+
+    /// `column IN (SELECT ...)` — matches rows where the column value appears in
+    /// the subquery result. The subquery must return a single column.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// Post::query()
+    ///     .filter(Post::user_id.in_subquery(
+    ///         User::query().filter(User::is_active.eq(true)).select((User::id,)),
+    ///     ))
+    ///     .all(&db)
+    ///     .await?
+    /// ```
+    pub fn in_subquery<X: crate::model::Model>(self, qs: QuerySet<X>) -> Expr {
+        Expr::in_subquery(self.expr(), qs.into_statement(), false)
+    }
+
+    /// `column NOT IN (SELECT ...)` — excludes rows where the column value
+    /// appears in the subquery result.
+    pub fn not_in_subquery<X: crate::model::Model>(self, qs: QuerySet<X>) -> Expr {
+        Expr::in_subquery(self.expr(), qs.into_statement(), true)
     }
 
     /// `column BETWEEN low AND high` (inclusive on both ends).
