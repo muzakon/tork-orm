@@ -461,3 +461,288 @@ fn scalar_subquery_renders_parenthesized_select() {
     assert!(sql.starts_with("(SELECT"), "expected (SELECT: {sql}");
     assert!(sql.ends_with(')'), "expected closing paren: {sql}");
 }
+
+// ── IS DISTINCT FROM / IS NOT DISTINCT FROM ─────────────────────────────────
+
+#[test]
+fn is_distinct_from_renders() {
+    let (sql, params) = render(&User::id.is_distinct_from(0_i64));
+    assert_eq!(sql, "\"users\".\"id\" IS DISTINCT FROM ?");
+    assert_eq!(params, vec![Value::Int(0)]);
+}
+
+#[test]
+fn is_not_distinct_from_renders() {
+    let (sql, params) = render(&User::username.is_not_distinct_from("alice"));
+    assert_eq!(sql, "\"users\".\"username\" IS NOT DISTINCT FROM ?");
+    assert_eq!(params, vec![Value::Text("alice".into())]);
+}
+
+#[test]
+fn is_distinct_from_with_nullable_column() {
+    // Nullable columns compare against their inner type.
+    let (sql, params) = render(&User::nickname.is_distinct_from("something"));
+    assert_eq!(sql, "\"users\".\"nickname\" IS DISTINCT FROM ?");
+    assert_eq!(params, vec![Value::Text("something".into())]);
+}
+
+// ── AGGREGATE WITH FILTER ────────────────────────────────────────────────────
+
+#[test]
+fn aggregate_filter_clause() {
+    let expr = User::id.count().filter(User::is_active.eq(true));
+    let (sql, params) = render(&expr);
+    assert_eq!(
+        sql,
+        "COUNT(\"users\".\"id\") FILTER (WHERE \"users\".\"is_active\" = ?)"
+    );
+    assert_eq!(params, vec![Value::Bool(true)]);
+}
+
+#[test]
+fn aggregate_filter_on_sum() {
+    let expr = User::id.sum().filter(User::is_active.eq(true));
+    let (sql, _) = render(&expr);
+    assert_eq!(
+        sql,
+        "SUM(\"users\".\"id\") FILTER (WHERE \"users\".\"is_active\" = ?)"
+    );
+}
+
+#[test]
+fn aggregate_without_filter_omits_clause() {
+    let (sql, _) = render(&User::id.count());
+    assert!(!sql.contains("FILTER"), "unexpected FILTER clause in: {sql}");
+}
+
+// ── STRING AGGREGATION ───────────────────────────────────────────────────────
+
+#[test]
+fn string_aggregation_column_sugar() {
+    let expr = User::username.string_aggregation(", ");
+    let (sql, params) = render(&expr);
+    assert_eq!(
+        sql,
+        "string_agg(\"users\".\"username\", ?)"
+    );
+    assert_eq!(params, vec![Value::Text(", ".into())]);
+}
+
+#[test]
+fn array_aggregation_column_sugar() {
+    let expr = User::id.array_aggregation();
+    let (sql, _) = render(&expr);
+    assert_eq!(sql, "array_agg(\"users\".\"id\")");
+}
+
+#[test]
+fn json_aggregation_column_sugar() {
+    let expr = User::username.json_aggregation();
+    let (sql, _) = render(&expr);
+    assert_eq!(sql, "json_agg(\"users\".\"username\")");
+}
+
+#[test]
+fn jsonb_aggregation_column_sugar() {
+    let expr = User::username.jsonb_aggregation();
+    let (sql, _) = render(&expr);
+    assert_eq!(sql, "jsonb_agg(\"users\".\"username\")");
+}
+
+// ── BOOL AND / OR ────────────────────────────────────────────────────────────
+
+#[test]
+fn bool_and_column_sugar() {
+    let (sql, _) = render(&User::is_active.bool_and());
+    assert_eq!(sql, "bool_and(\"users\".\"is_active\")");
+}
+
+#[test]
+fn bool_or_column_sugar() {
+    let (sql, _) = render(&User::is_active.bool_or());
+    assert_eq!(sql, "bool_or(\"users\".\"is_active\")");
+}
+
+// ── NEW JSON OPERATORS ───────────────────────────────────────────────────────
+
+// We need a JSON model to test jsonb methods
+#[derive(Debug, Clone, Model)]
+#[table(name = "profiles")]
+struct Profile {
+    #[field(primary_key, auto)]
+    id: i64,
+    metadata: Json,
+}
+
+#[test]
+fn json_has_key_renders_question_mark() {
+    let (sql, params) = render(&Profile::metadata.json_has_key("role"));
+    assert_eq!(sql, "\"profiles\".\"metadata\" ? ?");
+    assert_eq!(params, vec![Value::Text("role".into())]);
+}
+
+#[test]
+fn json_has_any_renders_qmark_pipe() {
+    let (sql, params) = render(&Profile::metadata.json_has_any(&["admin", "moderator"]));
+    assert_eq!(sql, "\"profiles\".\"metadata\" ?| ?");
+    assert_eq!(params.len(), 1);
+    match &params[0] {
+        Value::Array(items) => assert_eq!(items.len(), 2),
+        _ => panic!("expected array param"),
+    }
+}
+
+#[test]
+fn json_has_all_renders_qmark_ampersand() {
+    let (sql, params) = render(&Profile::metadata.json_has_all(&["name", "email"]));
+    assert_eq!(sql, "\"profiles\".\"metadata\" ?& ?");
+    assert_eq!(params.len(), 1);
+    match &params[0] {
+        Value::Array(items) => assert_eq!(items.len(), 2),
+        _ => panic!("expected array param"),
+    }
+}
+
+#[test]
+fn json_path_renders_hash_gt() {
+    let (sql, params) = render(&Profile::metadata.json_path(&["a", "b"]));
+    assert_eq!(sql, "\"profiles\".\"metadata\" #> ?");
+    assert_eq!(params.len(), 1);
+    match &params[0] {
+        Value::Array(items) => assert_eq!(items.len(), 2),
+        _ => panic!("expected array param"),
+    }
+}
+
+#[test]
+fn json_path_text_renders_hash_gt_gt() {
+    let (sql, params) = render(&Profile::metadata.json_path_text(&["a", "b"]));
+    assert_eq!(sql, "\"profiles\".\"metadata\" #>> ?");
+    assert_eq!(params.len(), 1);
+    match &params[0] {
+        Value::Array(items) => assert_eq!(items.len(), 2),
+        _ => panic!("expected array param"),
+    }
+}
+
+// ── STRING REGEX / SPLIT / REPLACE ───────────────────────────────────────────
+
+#[test]
+fn regex_match_column_sugar() {
+    let (sql, params) = render(&User::username.regex_match("^a.*"));
+    assert_eq!(sql, "regexp_like(\"users\".\"username\", ?)");
+    assert_eq!(params, vec![Value::Text("^a.*".into())]);
+}
+
+#[test]
+fn regex_replace_column_sugar() {
+    let (sql, params) = render(&User::email.regex_replace("@example\\.com", "@test.com"));
+    assert_eq!(sql, "regexp_replace(\"users\".\"email\", ?, ?)");
+    assert_eq!(params, vec![
+        Value::Text("@example\\.com".into()),
+        Value::Text("@test.com".into()),
+    ]);
+}
+
+#[test]
+fn split_part_column_sugar() {
+    let (sql, params) = render(&User::email.split_part("@", 2));
+    assert_eq!(sql, "split_part(\"users\".\"email\", ?, ?)");
+    assert_eq!(params, vec![
+        Value::Text("@".into()),
+        Value::Int(2),
+    ]);
+}
+
+#[test]
+fn replace_column_sugar() {
+    let (sql, params) = render(&User::email.replace("old", "new"));
+    assert_eq!(
+        sql,
+        "replace(\"users\".\"email\", ?, ?)"
+    );
+    assert_eq!(params, vec![
+        Value::Text("old".into()),
+        Value::Text("new".into()),
+    ]);
+}
+
+#[test]
+fn left_column_sugar() {
+    let (sql, params) = render(&User::username.left(3));
+    assert_eq!(sql, "left(\"users\".\"username\", ?)");
+    assert_eq!(params, vec![Value::Int(3)]);
+}
+
+#[test]
+fn right_column_sugar() {
+    let (sql, params) = render(&User::username.right(5));
+    assert_eq!(sql, "right(\"users\".\"username\", ?)");
+    assert_eq!(params, vec![Value::Int(5)]);
+}
+
+#[test]
+fn repeat_column_sugar() {
+    let (sql, params) = render(&User::username.repeat(2));
+    assert_eq!(sql, "repeat(\"users\".\"username\", ?)");
+    assert_eq!(params, vec![Value::Int(2)]);
+}
+
+#[test]
+fn reverse_column_sugar() {
+    let (sql, _) = render(&User::username.reverse());
+    assert_eq!(sql, "reverse(\"users\".\"username\")");
+}
+
+#[test]
+fn position_column_sugar() {
+    let (sql, params) = render(&User::email.position("@"));
+    assert_eq!(sql, "position(?, \"users\".\"email\")");
+    assert_eq!(params, vec![Value::Text("@".into())]);
+}
+
+// ── ARRAY OPERATORS (using a model with an array column) ─────────────────────
+
+#[derive(Debug, Clone, Model)]
+#[table(name = "tags")]
+struct TagSet {
+    #[field(primary_key, auto)]
+    id: i64,
+    labels: Vec<String>,
+}
+
+#[test]
+fn contained_by_renders_array_contained_by() {
+    let items = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+    let (sql, params) = render(&TagSet::labels.contained_by(items));
+    assert_eq!(sql, "\"tags\".\"labels\" <@ ?");
+    assert_eq!(params.len(), 1);
+}
+
+#[test]
+fn array_append_column_sugar() {
+    let (sql, params) = render(&TagSet::labels.array_append("new_tag".to_string()));
+    assert_eq!(sql, "array_append(\"tags\".\"labels\", ?)");
+    assert_eq!(params, vec![Value::Text("new_tag".into())]);
+}
+
+#[test]
+fn array_remove_column_sugar() {
+    let (sql, params) = render(&TagSet::labels.array_remove("old_tag".to_string()));
+    assert_eq!(sql, "array_remove(\"tags\".\"labels\", ?)");
+    assert_eq!(params, vec![Value::Text("old_tag".into())]);
+}
+
+#[test]
+fn array_position_column_sugar() {
+    let (sql, params) = render(&TagSet::labels.array_position("target".to_string()));
+    assert_eq!(sql, "array_position(\"tags\".\"labels\", ?)");
+    assert_eq!(params, vec![Value::Text("target".into())]);
+}
+
+#[test]
+fn array_length_column_sugar() {
+    let (sql, params) = render(&TagSet::labels.array_length(1));
+    assert_eq!(sql, "array_length(\"tags\".\"labels\", ?)");
+    assert_eq!(params, vec![Value::Int(1)]);
+}

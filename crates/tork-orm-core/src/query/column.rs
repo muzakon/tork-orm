@@ -267,7 +267,7 @@ impl<M, T> Column<M, T> {
 
     /// `COUNT(column)` for use in a projection or `HAVING`.
     pub fn count(self) -> Expr {
-        Expr::aggregate(AggFunc::Count, self.expr())
+        Expr::aggregate(AggFunc::Count, [self.expr()])
     }
 
     /// `lower(column)`.
@@ -295,6 +295,66 @@ impl<M, T> Column<M, T> {
         Expr::func("abs", [self.expr()])
     }
 
+    /// `column IS DISTINCT FROM value` — NULL-safe inequality.
+    ///
+    /// Two NULLs are not distinct (equal), a NULL and a non-NULL are distinct.
+    pub fn is_distinct_from<V: IntoSqlValue<T>>(self, value: V) -> Expr {
+        Expr::binary(
+            self.expr(),
+            BinaryOp::IsDistinctFrom,
+            Expr::value(value.into_sql_value()),
+        )
+    }
+
+    /// `column IS NOT DISTINCT FROM value` — NULL-safe equality.
+    ///
+    /// Two NULLs are not distinct (i.e. equal), a NULL and a non-NULL are distinct.
+    pub fn is_not_distinct_from<V: IntoSqlValue<T>>(self, value: V) -> Expr {
+        Expr::binary(
+            self.expr(),
+            BinaryOp::IsNotDistinctFrom,
+            Expr::value(value.into_sql_value()),
+        )
+    }
+
+    /// `string_agg(column, delimiter)` — concatenates non-null values with a delimiter.
+    ///
+    /// Only available for `String` columns; use the free function version for other
+    /// types.
+    pub fn string_aggregation(self, delimiter: &str) -> Expr
+    where
+        T: crate::value::BindValue,
+    {
+        Expr::aggregate(AggFunc::StringAggregation, [
+            self.expr(),
+            Expr::value(Value::Text(delimiter.to_string())),
+        ])
+    }
+
+    /// `array_agg(column)` — collects values into a PostgreSQL array.
+    pub fn array_aggregation(self) -> Expr
+    where
+        T: crate::value::BindValue,
+    {
+        Expr::aggregate(AggFunc::ArrayAggregation, [self.expr()])
+    }
+
+    /// `json_agg(column)` — aggregates values as a JSON array.
+    pub fn json_aggregation(self) -> Expr
+    where
+        T: crate::value::BindValue,
+    {
+        Expr::aggregate(AggFunc::JsonAggregation, [self.expr()])
+    }
+
+    /// `jsonb_agg(column)` — aggregates values as a JSONB array.
+    pub fn jsonb_aggregation(self) -> Expr
+    where
+        T: crate::value::BindValue,
+    {
+        Expr::aggregate(AggFunc::JsonbAggregation, [self.expr()])
+    }
+
     /// Builds a binary comparison against a bound value.
     fn compare<V: IntoSqlValue<T>>(self, op: BinaryOp, value: V) -> Expr {
         Expr::binary(self.expr(), op, Expr::value(value.into_sql_value()))
@@ -310,22 +370,22 @@ impl<M, T> From<Column<M, T>> for Expr {
 impl<M, T: Numeric> Column<M, T> {
     /// `SUM(column)`.
     pub fn sum(self) -> Expr {
-        Expr::aggregate(AggFunc::Sum, self.expr())
+        Expr::aggregate(AggFunc::Sum, [self.expr()])
     }
 
     /// `AVG(column)`.
     pub fn avg(self) -> Expr {
-        Expr::aggregate(AggFunc::Avg, self.expr())
+        Expr::aggregate(AggFunc::Avg, [self.expr()])
     }
 
     /// `MIN(column)`.
     pub fn min(self) -> Expr {
-        Expr::aggregate(AggFunc::Min, self.expr())
+        Expr::aggregate(AggFunc::Min, [self.expr()])
     }
 
     /// `MAX(column)`.
     pub fn max(self) -> Expr {
-        Expr::aggregate(AggFunc::Max, self.expr())
+        Expr::aggregate(AggFunc::Max, [self.expr()])
     }
 
     /// `column + value`
@@ -441,6 +501,80 @@ impl<M> Column<M, String> {
             ],
         )
     }
+
+    /// `regexp_like(column, pattern)` — tests whether the column matches the regex pattern.
+    pub fn regex_match(self, pattern: &str) -> Expr {
+        Expr::func("regexp_like", [self.expr(), Expr::value(Value::Text(pattern.to_string()))])
+    }
+
+    /// `regexp_replace(column, pattern, replacement)` — replaces regex matches.
+    pub fn regex_replace(self, pattern: &str, replacement: &str) -> Expr {
+        Expr::func("regexp_replace", [
+            self.expr(),
+            Expr::value(Value::Text(pattern.to_string())),
+            Expr::value(Value::Text(replacement.to_string())),
+        ])
+    }
+
+    /// `split_part(column, delimiter, field)` — splits on `delimiter` and returns the
+    /// `field`-th part (1-based).
+    pub fn split_part(self, delimiter: &str, field: i64) -> Expr {
+        Expr::func("split_part", [
+            self.expr(),
+            Expr::value(Value::Text(delimiter.to_string())),
+            Expr::value(Value::Int(field)),
+        ])
+    }
+
+    /// `replace(column, from, to)` — replaces all occurrences of `from` with `to`.
+    pub fn replace(self, from: &str, to: &str) -> Expr {
+        Expr::func("replace", [
+            self.expr(),
+            Expr::value(Value::Text(from.to_string())),
+            Expr::value(Value::Text(to.to_string())),
+        ])
+    }
+
+    /// `left(column, n)` — returns the first `n` characters.
+    pub fn left(self, n: i64) -> Expr {
+        Expr::func("left", [self.expr(), Expr::value(Value::Int(n))])
+    }
+
+    /// `right(column, n)` — returns the last `n` characters.
+    pub fn right(self, n: i64) -> Expr {
+        Expr::func("right", [self.expr(), Expr::value(Value::Int(n))])
+    }
+
+    /// `repeat(column, n)` — repeats the string `n` times.
+    pub fn repeat(self, n: i64) -> Expr {
+        Expr::func("repeat", [self.expr(), Expr::value(Value::Int(n))])
+    }
+
+    /// `reverse(column)` — reverses the string.
+    pub fn reverse(self) -> Expr {
+        Expr::func("reverse", [self.expr()])
+    }
+
+    /// `position(substring IN column)` — returns the position of the first occurrence.
+    pub fn position(self, substring: &str) -> Expr {
+        Expr::func("position", [
+            Expr::value(Value::Text(substring.to_string())),
+            self.expr(),
+        ])
+    }
+}
+
+/// Boolean column operations — additional aggregates.
+impl<M> Column<M, bool> {
+    /// `bool_and(column)` — true if every non-null value is true.
+    pub fn bool_and(self) -> Expr {
+        Expr::aggregate(AggFunc::BoolAnd, [self.expr()])
+    }
+
+    /// `bool_or(column)` — true if any non-null value is true.
+    pub fn bool_or(self) -> Expr {
+        Expr::aggregate(AggFunc::BoolOr, [self.expr()])
+    }
 }
 
 /// JSON column operators (PostgreSQL `jsonb`).
@@ -470,6 +604,56 @@ impl<M> Column<M, serde_json::Value> {
     pub fn json_contains(self, value: serde_json::Value) -> Expr {
         Expr::binary(self.expr(), BinaryOp::Contains, Expr::value(Value::Json(value)))
     }
+
+    /// `column ? key` — does the JSON key exist as a top-level key?
+    pub fn json_has_key(self, key: &str) -> Expr {
+        Expr::binary(
+            self.expr(),
+            BinaryOp::JsonKeyExists,
+            Expr::value(Value::Text(key.to_string())),
+        )
+    }
+
+    /// `column ?| keys` — do any of the given keys exist as top-level keys?
+    pub fn json_has_any(self, keys: &[&str]) -> Expr {
+        Expr::binary(
+            self.expr(),
+            BinaryOp::JsonKeyExistsAny,
+            Expr::value(Value::Array(keys.iter().map(|k| Value::Text(k.to_string())).collect())),
+        )
+    }
+
+    /// `column ?& keys` — do all of the given keys exist as top-level keys?
+    pub fn json_has_all(self, keys: &[&str]) -> Expr {
+        Expr::binary(
+            self.expr(),
+            BinaryOp::JsonKeyExistsAll,
+            Expr::value(Value::Array(keys.iter().map(|k| Value::Text(k.to_string())).collect())),
+        )
+    }
+
+    /// `column #> path` — extracts a JSON sub-object at the given path, as JSON.
+    ///
+    /// The path is a `&[&str]` of key names, rendered as a PostgreSQL text array
+    /// literal (e.g. `'{a,b}'`).
+    pub fn json_path(self, path: &[&str]) -> Expr {
+        let path_array: Vec<Value> = path.iter().map(|k| Value::Text(k.to_string())).collect();
+        Expr::binary(
+            self.expr(),
+            BinaryOp::JsonPath,
+            Expr::value(Value::Array(path_array)),
+        )
+    }
+
+    /// `column #>> path` — extracts a JSON sub-object at the given path, as text.
+    pub fn json_path_text(self, path: &[&str]) -> Expr {
+        let path_array: Vec<Value> = path.iter().map(|k| Value::Text(k.to_string())).collect();
+        Expr::binary(
+            self.expr(),
+            BinaryOp::JsonPathText,
+            Expr::value(Value::Array(path_array)),
+        )
+    }
 }
 
 /// Array column operators (PostgreSQL `element[]`).
@@ -496,6 +680,33 @@ impl<M, T: BindValue> Column<M, Vec<T>> {
     pub fn overlaps(self, items: impl IntoIterator<Item = T>) -> Expr {
         let array = Value::Array(items.into_iter().map(|item| item.to_value()).collect());
         Expr::binary(self.expr(), BinaryOp::Overlap, Expr::value(array))
+    }
+
+    /// `column <@ items` — tests whether the array is contained by `items`
+    /// (every element of the column is in items).
+    pub fn contained_by(self, items: impl IntoIterator<Item = T>) -> Expr {
+        let array = Value::Array(items.into_iter().map(|item| item.to_value()).collect());
+        Expr::binary(self.expr(), BinaryOp::ArrayContainedBy, Expr::value(array))
+    }
+
+    /// `array_append(column, value)` — appends an element to the array.
+    pub fn array_append(self, value: T) -> Expr {
+        Expr::func("array_append", [self.expr(), Expr::value(value.to_value())])
+    }
+
+    /// `array_remove(column, value)` — removes all occurrences of `value` from the array.
+    pub fn array_remove(self, value: T) -> Expr {
+        Expr::func("array_remove", [self.expr(), Expr::value(value.to_value())])
+    }
+
+    /// `array_position(column, value)` — returns the index of the first occurrence of `value` (1-based).
+    pub fn array_position(self, value: T) -> Expr {
+        Expr::func("array_position", [self.expr(), Expr::value(value.to_value())])
+    }
+
+    /// `array_length(column, dimension)` — returns the length of the array along the given dimension (1-based).
+    pub fn array_length(self, dimension: i64) -> Expr {
+        Expr::func("array_length", [self.expr(), Expr::value(Value::Int(dimension))])
     }
 }
 

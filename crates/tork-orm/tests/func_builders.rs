@@ -123,3 +123,187 @@ fn concat_variadic() {
         "concat(\"users\".\"first_name\", \"users\".\"last_name\")"
     );
 }
+
+// ── NULLIF / GREATEST / LEAST ─────────────────────────────────────────────────
+
+#[test]
+fn nullif_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = nullif(User::first_name, User::last_name);
+    assert_eq!(
+        predicate_sql(&dialect, &expr),
+        "nullif(\"users\".\"first_name\", \"users\".\"last_name\")"
+    );
+}
+
+#[test]
+fn greatest_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = greatest([User::id.into(), Expr::value(Value::Int(0))]);
+    assert_eq!(
+        predicate_sql(&dialect, &expr),
+        "greatest(\"users\".\"id\", 0)"
+    );
+}
+
+#[test]
+fn least_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = least([User::id.into(), Expr::value(Value::Int(100))]);
+    assert_eq!(
+        predicate_sql(&dialect, &expr),
+        "least(\"users\".\"id\", 100)"
+    );
+}
+
+// ── RANDOM ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn random_value_renders() {
+    let dialect = SqliteDialect::new();
+    assert_eq!(predicate_sql(&dialect, &random_value()), "random()");
+}
+
+// ── REGEX / SPLIT / REPLACE FREE FUNCTIONS ────────────────────────────────────
+
+#[test]
+fn regex_match_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = regex_match(User::email, "^admin@");
+    assert_eq!(
+        predicate_sql(&dialect, &expr),
+        "regexp_like(\"users\".\"email\", '^admin@')"
+    );
+}
+
+#[test]
+fn regex_replace_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = regex_replace(User::email, "@old\\.com", "@new.com");
+    assert_eq!(
+        predicate_sql(&dialect, &expr),
+        "regexp_replace(\"users\".\"email\", '@old\\.com', '@new.com')"
+    );
+}
+
+#[test]
+fn split_part_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = split_part(User::email, "@", 2);
+    assert_eq!(
+        predicate_sql(&dialect, &expr),
+        "split_part(\"users\".\"email\", '@', 2)"
+    );
+}
+
+#[test]
+fn replace_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = replace(User::email, "example", "test");
+    assert_eq!(
+        predicate_sql(&dialect, &expr),
+        "replace(\"users\".\"email\", 'example', 'test')"
+    );
+}
+
+#[test]
+fn left_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = left(User::email, 3);
+    assert_eq!(predicate_sql(&dialect, &expr), "left(\"users\".\"email\", 3)");
+}
+
+#[test]
+fn right_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = right(User::email, 5);
+    assert_eq!(predicate_sql(&dialect, &expr), "right(\"users\".\"email\", 5)");
+}
+
+#[test]
+fn repeat_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = repeat(User::email, 2);
+    assert_eq!(predicate_sql(&dialect, &expr), "repeat(\"users\".\"email\", 2)");
+}
+
+#[test]
+fn reverse_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = reverse(User::email);
+    assert_eq!(predicate_sql(&dialect, &expr), "reverse(\"users\".\"email\")");
+}
+
+#[test]
+fn position_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = position("@", User::email);
+    assert_eq!(predicate_sql(&dialect, &expr), "position('@', \"users\".\"email\")");
+}
+
+// ── AGGREGATE FREE FUNCTIONS ──────────────────────────────────────────────────
+
+#[test]
+fn string_aggregation_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = string_aggregation(User::email, ",");
+    assert_eq!(
+        predicate_sql(&dialect, &expr),
+        "string_agg(\"users\".\"email\", ',')"
+    );
+}
+
+#[test]
+fn array_aggregation_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = array_aggregation(User::id);
+    assert_eq!(predicate_sql(&dialect, &expr), "array_agg(\"users\".\"id\")");
+}
+
+#[test]
+fn json_aggregation_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = json_aggregation(User::email);
+    assert_eq!(
+        predicate_sql(&dialect, &expr),
+        "json_agg(\"users\".\"email\")"
+    );
+}
+
+#[test]
+fn jsonb_aggregation_free_function() {
+    let dialect = SqliteDialect::new();
+    let expr = jsonb_aggregation(User::email);
+    assert_eq!(
+        predicate_sql(&dialect, &expr),
+        "jsonb_agg(\"users\".\"email\")"
+    );
+}
+
+#[test]
+fn bool_and_free_function() {
+    #[derive(Debug, Clone, Model)]
+    #[table(name = "flags")]
+    struct Flag {
+        #[field(primary_key, auto)]
+        id: i64,
+        active: bool,
+    }
+    let dialect = SqliteDialect::new();
+    let expr = bool_and(Flag::active);
+    assert_eq!(predicate_sql(&dialect, &expr), "bool_and(\"flags\".\"active\")");
+}
+
+#[test]
+fn bool_or_free_function() {
+    #[derive(Debug, Clone, Model)]
+    #[table(name = "flags")]
+    struct Flag {
+        #[field(primary_key, auto)]
+        id: i64,
+        active: bool,
+    }
+    let dialect = SqliteDialect::new();
+    let expr = bool_or(Flag::active);
+    assert_eq!(predicate_sql(&dialect, &expr), "bool_or(\"flags\".\"active\")");
+}

@@ -51,7 +51,12 @@ pub use query::ast::{Join, JoinKind, OrderItem, SelectItem, SelectStatement, Uni
 pub use query::UnionQuery;
 pub use query::column::{Column, IntoAssignExpr, IntoSqlValue, Numeric};
 pub use query::expr::{AggFunc, BinaryOp, CaseWhen, Expr, LogicalOp};
-pub use query::func::{abs, ceil, coalesce, concat, floor, func, length, lower, round, substr, substr_len, trim, upper};
+pub use query::func::{
+    abs, array_aggregation, bool_and, bool_or, ceil, coalesce, concat, floor, func,
+    greatest, json_aggregation, jsonb_aggregation, least, left, length, lower, nullif,
+    position, random_value, regex_match, regex_replace, repeat, replace, reverse, right,
+    round, split_part, string_aggregation, substr, substr_len, trim, upper,
+};
 pub use query::projection::{ExprTuple, IntoExpr, IntoSelectItem, Projection};
 pub use query::write::{Assignment, DeleteStatement, InsertStatement, OnConflict, UpdateStatement};
 pub use query::{Page, QuerySet};

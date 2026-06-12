@@ -143,8 +143,11 @@ macro_rules! transaction {
 /// error type.
 pub mod prelude {
     pub use crate::{
-        abs, ceil, coalesce, concat, floor, func, length, lower, round, substr, substr_len, trim,
-        upper, Assignment, BindValue, BoxFuture, Column,
+        abs, array_aggregation, bool_and, bool_or, ceil, coalesce, concat, floor, func,
+        greatest, json_aggregation, jsonb_aggregation, least, left, length, lower, nullif,
+        position, random_value, regex_match, regex_replace, repeat, replace, reverse, right,
+        round, split_part, string_aggregation, substr, substr_len, trim, upper,
+        Assignment, BindValue, BoxFuture, Column,
         ColumnDef, ColumnDefault, Database, ErrorKind, Executor, Expr, ForeignKeyDef, FromRow, FromValue,
         IndexColumn, IndexDef, IsolationLevel, Json, Model, ModelHooks, OrderItem, OrmError, Preloaded, QuerySet,
         Relation, RelationKind, Result, Row, SqlType, Transaction, TransactionBuilder, Value,

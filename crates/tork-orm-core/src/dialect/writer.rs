@@ -138,11 +138,21 @@ impl<'a> QueryWriter<'a> {
                 self.write_expr(expr);
                 self.push_sql(if *negated { " IS NOT NULL" } else { " IS NULL" });
             }
-            Expr::Aggregate { func, arg } => {
+            Expr::Aggregate { func, args, filter } => {
                 self.push_sql(func.as_sql());
                 self.sql.push('(');
-                self.write_expr(arg);
+                for (i, arg) in args.iter().enumerate() {
+                    if i != 0 {
+                        self.push_sql(", ");
+                    }
+                    self.write_expr(arg);
+                }
                 self.sql.push(')');
+                if let Some(filter_expr) = filter {
+                    self.push_sql(" FILTER (WHERE ");
+                    self.write_expr(filter_expr);
+                    self.sql.push(')');
+                }
             }
             Expr::Func { name, args } => {
                 self.push_sql(name);

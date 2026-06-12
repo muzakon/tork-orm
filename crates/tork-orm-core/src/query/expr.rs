@@ -21,6 +21,18 @@ pub enum AggFunc {
     Min,
     /// `MAX`
     Max,
+    /// `string_agg(expr, delimiter)` — concatenates non-null values with a delimiter.
+    StringAggregation,
+    /// `array_agg(expr)` — collects values into an array.
+    ArrayAggregation,
+    /// `json_agg(expr)` — aggregates values as a JSON array.
+    JsonAggregation,
+    /// `jsonb_agg(expr)` — aggregates values as a JSONB array.
+    JsonbAggregation,
+    /// `bool_and(expr)` — true if every non-null input is true.
+    BoolAnd,
+    /// `bool_or(expr)` — true if any non-null input is true.
+    BoolOr,
 }
 
 impl AggFunc {
@@ -32,6 +44,12 @@ impl AggFunc {
             AggFunc::Avg => "AVG",
             AggFunc::Min => "MIN",
             AggFunc::Max => "MAX",
+            AggFunc::StringAggregation => "string_agg",
+            AggFunc::ArrayAggregation => "array_agg",
+            AggFunc::JsonAggregation => "json_agg",
+            AggFunc::JsonbAggregation => "jsonb_agg",
+            AggFunc::BoolAnd => "bool_and",
+            AggFunc::BoolOr => "bool_or",
         }
     }
 }
@@ -76,6 +94,22 @@ pub enum BinaryOp {
     Contains,
     /// `&&` — overlaps (PostgreSQL arrays share at least one element).
     Overlap,
+    /// `IS DISTINCT FROM` — NULL-safe inequality (PostgreSQL).
+    IsDistinctFrom,
+    /// `IS NOT DISTINCT FROM` — NULL-safe equality (PostgreSQL).
+    IsNotDistinctFrom,
+    /// `?` — does the JSON key exist as a top-level key (PostgreSQL jsonb).
+    JsonKeyExists,
+    /// `?|` — do any of the string array exist as top-level keys (PostgreSQL jsonb).
+    JsonKeyExistsAny,
+    /// `?&` — do all of the string array exist as top-level keys (PostgreSQL jsonb).
+    JsonKeyExistsAll,
+    /// `#>` — get JSON object at specified path (PostgreSQL jsonb).
+    JsonPath,
+    /// `#>>` — get JSON object at specified path as text (PostgreSQL jsonb).
+    JsonPathText,
+    /// `<@` — left is contained by right (PostgreSQL array).
+    ArrayContainedBy,
 }
 
 impl BinaryOp {
@@ -99,6 +133,14 @@ impl BinaryOp {
             BinaryOp::JsonGetText => "->>",
             BinaryOp::Contains => "@>",
             BinaryOp::Overlap => "&&",
+            BinaryOp::IsDistinctFrom => "IS DISTINCT FROM",
+            BinaryOp::IsNotDistinctFrom => "IS NOT DISTINCT FROM",
+            BinaryOp::JsonKeyExists => "?",
+            BinaryOp::JsonKeyExistsAny => "?|",
+            BinaryOp::JsonKeyExistsAll => "?&",
+            BinaryOp::JsonPath => "#>",
+            BinaryOp::JsonPathText => "#>>",
+            BinaryOp::ArrayContainedBy => "<@",
         }
     }
 }
@@ -166,12 +208,18 @@ pub enum Expr {
         /// Whether the test is negated (`IS NOT NULL`).
         negated: bool,
     },
-    /// An aggregate over an expression, `FUNC(expr)`.
+    /// An aggregate over one or more expressions, `FUNC(args...)`.
+    ///
+    /// Most aggregates take a single argument (e.g. `SUM(col)`); some take two
+    /// (e.g. `string_agg(col, delimiter)`). An optional `FILTER (WHERE ...)`
+    /// clause restricts which rows contribute to the aggregate.
     Aggregate {
         /// The aggregate function.
         func: AggFunc,
-        /// The aggregated expression.
-        arg: Box<Expr>,
+        /// The aggregated expressions, in order.
+        args: Vec<Expr>,
+        /// An optional `FILTER (WHERE ...)` predicate.
+        filter: Option<Box<Expr>>,
     },
     /// A scalar function call, `name(arg, ...)`, such as `lower(email)`.
     Func {
@@ -359,11 +407,60 @@ impl Expr {
         }
     }
 
-    /// Builds an aggregate over an expression.
-    pub fn aggregate(func: AggFunc, arg: Expr) -> Self {
+    /// Builds an aggregate over one or more expressions.
+    ///
+    /// Most aggregates take a single argument:
+    /// ```
+    /// # use tork_orm_core::query::expr::{AggFunc, Expr};
+    /// let c = Expr::aggregate(AggFunc::Count, [Expr::column("t", "c")]);
+    /// # let _ = c;
+    /// ```
+    ///
+    /// Some take two arguments (e.g. `string_agg`):
+    /// ```
+    /// # use tork_orm_core::query::expr::{AggFunc, Expr};
+    /// let sa = Expr::aggregate(AggFunc::StringAggregation, [
+    ///     Expr::column("t", "c"),
+    ///     Expr::value(tork_orm_core::Value::Text(",".into())),
+    /// ]);
+    /// # let _ = sa;
+    /// ```
+    pub fn aggregate(func: AggFunc, args: impl IntoIterator<Item = Expr>) -> Self {
         Expr::Aggregate {
             func,
-            arg: Box::new(arg),
+            args: args.into_iter().collect(),
+            filter: None,
+        }
+    }
+
+    /// Attaches a `FILTER (WHERE ...)` clause to an aggregate expression.
+    ///
+    /// Only rows matching the filter contribute to the aggregate.
+    ///
+    /// # Panics
+    ///
+    /// Panics if this expression is not an `Aggregate` variant.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tork_orm_core::query::expr::{AggFunc, Expr};
+    /// let c = Expr::aggregate(AggFunc::Count, [Expr::column("t", "c")])
+    ///     .filter(Expr::binary(
+    ///         Expr::column("t", "active"),
+    ///         tork_orm_core::query::expr::BinaryOp::Eq,
+    ///         Expr::value(tork_orm_core::Value::Bool(true)),
+    ///     ));
+    /// # let _ = c;
+    /// ```
+    pub fn filter(self, predicate: Expr) -> Self {
+        match self {
+            Expr::Aggregate { func, args, filter: None } => Expr::Aggregate {
+                func,
+                args,
+                filter: Some(Box::new(predicate)),
+            },
+            _ => panic!("filter() can only be called on Aggregate expressions"),
         }
     }
 
