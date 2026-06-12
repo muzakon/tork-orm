@@ -722,3 +722,198 @@ let total = User::query()
 ```
 
 The ORDER BY and LIMIT / OFFSET clauses on `UnionQuery` apply to the whole result, not to any individual branch. If you need to sort or limit inside a branch, build that `QuerySet` separately first.
+
+---
+
+## 20. Shorthand Lookups
+
+The ORM provides several shortcuts for the most common lookup patterns.
+
+### A. `find` — Primary Key Lookup
+
+`Model::find(executor, pk)` returns the row with the given primary key, or an error if no such row exists:
+
+```rust
+// Fetch user by primary key (errors with NotFound if the row is missing).
+let user: User = User::find(&db, 1).await?;
+println!("Found: {}", user.username);
+
+// The PK can be any BindValue: i64, i32, String, &str, etc.
+let user = User::find(&db, 42_i64).await?;
+```
+
+It is equivalent to:
+```rust
+User::query().filter(User::id.eq(42)).one(&db).await
+```
+
+### B. `get_or_none` — Optional Primary Key Lookup
+
+`Model::get_or_none(executor, pk)` returns `Some(row)` when the key exists and `None` when it does not. Like `find`, it detects and errors on multiple matches (which should never happen for a primary key):
+
+```rust
+if let Some(user) = User::get_or_none(&db, 1).await? {
+    println!("User exists: {}", user.username);
+} else {
+    println!("No user with that id");
+}
+```
+
+### C. `one_or_none` — QuerySet Terminal
+
+`QuerySet::one_or_none()` returns `Ok(None)` when no row matches, `Ok(Some(m))` when exactly one matches, and errors with `MultipleFound` when more than one matches. It differs from `first` (which silently adds `LIMIT 1`) and from `one` (which errors on both zero and multiple):
+
+```rust
+// Returns None if the username does not exist; errors if it is ambiguous.
+let user: Option<User> = User::query()
+    .filter(User::username.eq("alice"))
+    .one_or_none(&db)
+    .await?;
+
+match user {
+    Some(u) => println!("Found: {}", u.username),
+    None => println!("No matching user"),
+}
+```
+
+---
+
+## 21. Pluck — Value Extraction
+
+Extract a single column's values as a flat `Vec<T>` without defining a DTO struct. Useful for building ID lists, dropdown options, or simple lookups.
+
+```rust
+// All usernames as Vec<String>.
+let names: Vec<String> = User::query()
+    .order_by(User::id.asc())
+    .pluck(&db, User::username)
+    .await?;
+
+// Active user IDs as Vec<i64>.
+let active_ids: Vec<i64> = User::query()
+    .filter(User::is_active.eq(true))
+    .pluck(&db, User::id)
+    .await?;
+
+// Distinct status values.
+let statuses: Vec<bool> = User::query()
+    .distinct()
+    .pluck(&db, User::is_active)
+    .await?;
+
+// Pluck respects filters, ordering, and pagination.
+let page: Vec<String> = User::query()
+    .order_by(User::id.asc())
+    .limit(10)
+    .offset(20)
+    .pluck(&db, User::username)
+    .await?;
+
+// An empty result set returns an empty Vec.
+let nobody: Vec<String> = User::query()
+    .filter(User::username.eq("nobody"))
+    .pluck(&db, User::username)
+    .await?;
+assert!(nobody.is_empty());
+```
+
+---
+
+## 22. Pagination
+
+Raw `limit`/`offset` works fine for simple cases, but when you need page metadata (total count, page count, etc.) the `paginate` helper runs both queries and packages everything into a [`Page`] value.
+
+```rust
+use tork_orm::Page;
+
+// Page 2 of users, 10 per page.
+let page: Page<User> = User::query()
+    .order_by(User::id.asc())
+    .paginate(&db, 2, 10)
+    .await?;
+
+println!("Showing {}-{} of {} (page {} of {})",
+    (page.page - 1) * page.page_size + 1,
+    (page.page - 1) * page.page_size + page.items.len() as u64,
+    page.total,
+    page.page,
+    page.pages,
+);
+
+for user in &page.items {
+    println!("{}", user.username);
+}
+```
+
+The [`Page`] struct carries everything you need to render pagination UI:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `items` | `Vec<M>` | The rows on this page |
+| `total` | `i64` | Total number of matching rows |
+| `page` | `u64` | Current page number (1-based) |
+| `page_size` | `u64` | Items per page |
+| `pages` | `u64` | Total number of pages |
+
+The page number is clamped: page 0 behaves like page 1, and a page beyond the end returns the last page. A result set with zero rows has `page = 1`, `pages = 1`, and an empty `items`.
+
+Combine with [`select`](#7-grouping-and-aggregates) and [`paginate_as`] to paginate projections:
+
+```rust
+#[derive(QueryResult)]
+struct UserSummary {
+    id: i64,
+    username: String,
+}
+
+let page: Page<UserSummary> = User::query()
+    .select((User::id, User::username))
+    .order_by(User::id.asc())
+    .paginate_as::<UserSummary, _>(&db, 1, 20)
+    .await?;
+```
+
+---
+
+## 23. `none()` — Empty Result Set
+
+`.none()` adds a `0 = 1` filter that guarantees the query returns zero rows. Useful as a starting point that only gets populated once filters are applied, or as a placeholder branch in a union:
+
+```rust
+let empty = User::query().none().all(&db).await?;
+assert!(empty.is_empty());
+```
+
+## 24. `for_update()` — Row-Level Locking
+
+`.for_update()` appends `FOR UPDATE` to the `SELECT` statement, locking matched rows against concurrent modification. Must be used inside a transaction.
+
+```rust
+let user = User::query()
+    .filter(User::id.eq(42))
+    .for_update()
+    .one(&db)
+    .await?;
+```
+
+**Note:** The SQLite version bundled with this crate does not support `FOR UPDATE` (requires SQLite 3.54+). This feature is intended for PostgreSQL/MySQL backends and future SQLite versions. It is safe to call on any backend — the SQL is rendered, but execution will fail if the backend does not support it.
+
+## 25. `chunk(size)` — Batch Processing
+
+`.chunk(size)` loads all matching rows in batches using offset-based pagination. Returns `Vec<Vec<M>>` — each inner `Vec` is one batch of up to `size` rows. The last batch may be smaller. Useful for memory-constrained processing of large result sets:
+
+```rust
+let batches = User::query()
+    .filter(User::is_active.eq(true))
+    .order_by(User::id.asc())
+    .chunk(&db, 100)
+    .await?;
+
+for batch in batches {
+    for user in batch {
+        println!("{}", user.username);
+    }
+}
+```
+
+**Eager loading:** all batches are fetched before the method returns — there is no server-side cursor. Each batch runs a separate `SELECT` with `LIMIT size OFFSET n` against the same query.

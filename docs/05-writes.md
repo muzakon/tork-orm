@@ -172,3 +172,56 @@ println!("Removed {} inactive accounts", removed.len());
 ```
 
 Both methods require SQLite 3.35 or later (available in all recent releases of the bundled `rusqlite`).
+
+---
+
+## 6. Convenience Methods: Get or Create / Update or Create
+
+These methods combine a lookup with a write in a single call, matching the common "find-or-create" pattern.
+
+### A. `get_or_create`
+
+`Model::get_or_create(executor, filter, value)` tries to find a row matching `filter`. If found, it returns `(row, false)`. If not, it inserts `value` and returns `(stored_row, true)`.
+
+```rust
+// Try to find alice; create her if she does not exist.
+let (user, created) = User::get_or_create(
+    &db,
+    |q| q.filter(User::username.eq("alice")),
+    &User { id: 0, username: "alice".into(), email: "alice@x.com".into(), is_active: true },
+).await?;
+
+if created {
+    println!("Created new user: {}", user.username);
+} else {
+    println!("Found existing user: {}", user.username);
+}
+```
+
+The lookup uses `one_or_none`, so it errors with `MultipleFound` if the filter matches more than one row.
+
+### B. `update_or_create`
+
+`Model::update_or_create(executor, filter, value)` finds a row by `filter`. If found, the row is updated with `value`'s fields. If not, `value` is inserted. Returns `(row, false)` for an update or `(row, true)` for a create.
+
+```rust
+// Update alice's email if she exists, or create her if she does not.
+let (user, created) = User::update_or_create(
+    &db,
+    |q| q.filter(User::username.eq("alice")),
+    &User { id: 0, username: "alice".into(), email: "alice-new@x.com".into(), is_active: false },
+).await?;
+```
+
+### C. `first_or_create`
+
+`Model::first_or_create(executor, filter, value)` finds the first row by `filter`. If found, returns it. If not, inserts `value` and returns the stored row. Unlike `get_or_create`, multiple matches silently return the first one.
+
+```rust
+// Return the first active user or create a new one.
+let user = User::first_or_create(
+    &db,
+    |q| q.filter(User::is_active.eq(true)),
+    &User { id: 0, username: "default".into(), email: "default@x.com".into(), is_active: true },
+).await?;
+```
