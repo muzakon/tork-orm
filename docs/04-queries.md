@@ -587,3 +587,80 @@ let expr = func("date", [Expr::column("events", "created_at")]);
 ```
 
 The `i`-prefixed variants delegate to `.ilike()`, which on SQLite renders as `lower(column) LIKE lower(pattern)`. Wildcards inside the search string (`%`, `_`) are **not** escaped — use `.like()` directly if you need to pass a pattern with explicit wildcards.
+
+---
+
+## 17. Raw SQL
+
+When the query builder cannot express a condition, use `filter_raw` to inject a raw SQL predicate. Params are plain Rust values — no `Value::` wrapping required. Write `?` for each placeholder.
+
+```rust
+// Filter by a database function the builder does not cover
+User::query()
+    .filter_raw("LENGTH(username) > ?", [5_i64])
+    .all(&db)
+    .await?;
+
+// Multiple params, different types — pass Value explicitly for mixed types
+User::query()
+    .filter_raw("created_at > ? AND created_at < ?", [
+        Value::Text("2024-01-01".into()),
+        Value::Text("2025-01-01".into()),
+    ])
+    .all(&db)
+    .await?;
+```
+
+For a SQL fragment without placeholders, use `Expr::raw` as a filter value instead:
+
+```rust
+// No-param raw expression on the RHS of a comparison
+User::query()
+    .filter(User::created_at.lt(Expr::raw("date('now', '-30 days')")))
+    .all(&db)
+    .await?;
+
+// Constant in a projection
+User::query()
+    .select((Expr::raw("CURRENT_TIMESTAMP").as_("now"),))
+    .all_as::<NowRow>(&db)
+    .await?;
+```
+
+> `Expr::raw` is reserved for column-free, no-param constants. Use `filter_raw` whenever you need to bind values.
+
+---
+
+## 18. EXISTS / NOT EXISTS Subquery
+
+`Expr::exists` and `Expr::not_exists` test whether a correlated subquery returns any rows. They are most useful when paired with a reference to the outer row's column via `.expr()`.
+
+```rust
+// Users who have written at least one post
+User::query()
+    .filter(Expr::exists(
+        Post::query().filter(Post::user_id.eq(User::id.expr())),
+    ))
+    .all(&db)
+    .await?;
+
+// Users who have never written a post
+User::query()
+    .filter(Expr::not_exists(
+        Post::query().filter(Post::user_id.eq(User::id.expr())),
+    ))
+    .all(&db)
+    .await?;
+```
+
+The outer table's column is referenced with `.expr()` — it is emitted as a bare `"table"."column"` reference inside the subquery. There is no automatic correlation or join; the semantics are exactly what you write.
+
+`EXISTS` can also be used with a non-correlated subquery as a guard:
+
+```rust
+// Only run the outer query if there is at least one active config row
+Settings::query()
+    .filter(Expr::exists(Config::query().filter(Config::active.eq(true))))
+    .all(&db)
+    .await?;
+```
