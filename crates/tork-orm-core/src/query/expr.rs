@@ -203,7 +203,7 @@ pub enum Expr {
 ///
 /// ```
 /// use tork_orm_core::query::expr::Expr;
-/// use tork_orm_core::value::Value;
+/// use tork_orm_core::Value;
 ///
 /// let expr = Expr::case()
 ///     .when(Expr::value(Value::Bool(true)), Expr::value(Value::Int(1)))
