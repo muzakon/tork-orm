@@ -141,6 +141,59 @@ impl<M: Model> QuerySet<M> {
         self
     }
 
+    /// Right-joins a related table (`RIGHT JOIN`).
+    ///
+    /// All rows from the related side are included; unmatched rows from `M`
+    /// produce `NULL` on the left. The inverse of `left_join`.
+    ///
+    /// Not supported by SQLite before 3.39; available in the AST for future
+    /// backends and SQLite 3.39+.
+    pub fn right_join<C>(mut self, relation: crate::relation::Relation<M, C>) -> Self {
+        self.statement
+            .joins
+            .push(relation.join_node_with_kind(JoinKind::Right));
+        self
+    }
+
+    /// Full-outer-joins a related table (`FULL OUTER JOIN`).
+    ///
+    /// Rows from both sides are always included; unmatched columns are `NULL`.
+    ///
+    /// Not supported by SQLite before 3.39; available in the AST for future
+    /// backends and SQLite 3.39+.
+    pub fn full_join<C>(mut self, relation: crate::relation::Relation<M, C>) -> Self {
+        self.statement
+            .joins
+            .push(relation.join_node_with_kind(JoinKind::Full));
+        self
+    }
+
+    /// Cross-joins a table (`CROSS JOIN`).
+    ///
+    /// Produces the cartesian product of every row in `M` with every row in
+    /// `C`. No `ON` condition is needed or used. Useful for pairing small
+    /// dimension tables (e.g. a sizes × colors grid). Use with care on large
+    /// tables — the result set grows as *|M| × |C|*.
+    ///
+    /// Unlike the other join methods, `cross_join` does not take a `Relation`
+    /// argument because no foreign key is involved. The target model `C` is
+    /// named as a type parameter:
+    ///
+    /// ```ignore
+    /// Size::query().cross_join::<Color>()
+    /// ```
+    pub fn cross_join<C: crate::model::Model>(mut self) -> Self {
+        self.statement.joins.push(crate::query::ast::Join {
+            kind: JoinKind::Cross,
+            table: C::TABLE,
+            left_table: "",
+            left_column: "",
+            right_table: "",
+            right_column: "",
+        });
+        self
+    }
+
     /// Preloads a related table in a separate, N+1-free query.
     ///
     /// Switches to a [`Preloader`](crate::preload::Preloader); the parents come

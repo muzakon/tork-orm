@@ -6,7 +6,7 @@
 //! share one rendering walk and differ only in their primitives.
 
 use crate::dialect::Dialect;
-use crate::query::ast::{SelectItem, SelectStatement};
+use crate::query::ast::{JoinKind, SelectItem, SelectStatement};
 use crate::query::expr::Expr;
 use crate::query::write::{DeleteStatement, InsertStatement, UpdateStatement};
 use crate::value::Value;
@@ -291,10 +291,12 @@ impl<'a> QueryWriter<'a> {
             self.push_sql(join.kind.as_sql());
             self.sql.push(' ');
             self.push_identifier(join.table);
-            self.push_sql(" ON ");
-            self.push_qualified(join.left_table, join.left_column);
-            self.push_sql(" = ");
-            self.push_qualified(join.right_table, join.right_column);
+            if join.kind != JoinKind::Cross {
+                self.push_sql(" ON ");
+                self.push_qualified(join.left_table, join.left_column);
+                self.push_sql(" = ");
+                self.push_qualified(join.right_table, join.right_column);
+            }
         }
         self.write_where(&statement.filters);
 

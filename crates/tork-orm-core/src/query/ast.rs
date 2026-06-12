@@ -35,6 +35,10 @@ pub enum JoinKind {
     ///
     /// Not supported by SQLite; available in the AST for future backends.
     Full,
+    /// `CROSS JOIN` — cartesian product; every left row paired with every right row.
+    ///
+    /// Has no `ON` condition. Use with care on large tables.
+    Cross,
 }
 
 impl JoinKind {
@@ -45,6 +49,7 @@ impl JoinKind {
             JoinKind::Left  => "LEFT JOIN",
             JoinKind::Right => "RIGHT JOIN",
             JoinKind::Full  => "FULL OUTER JOIN",
+            JoinKind::Cross => "CROSS JOIN",
         }
     }
 }

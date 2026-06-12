@@ -139,3 +139,27 @@ async fn belongs_to_join_filters_children_by_parent() {
     titles.sort_unstable();
     assert_eq!(titles, ["alice-draft", "alice-published"]);
 }
+
+#[tokio::test]
+async fn left_join_includes_users_without_posts() {
+    let db = seed().await;
+
+    // carol has no posts — a left join still returns her row; inner join would drop it.
+    let users = User::query()
+        .left_join(User::posts())
+        .distinct()
+        .all(&db)
+        .await
+        .unwrap();
+    // All three users (alice, bob, carol).
+    assert_eq!(users.len(), 3);
+}
+
+#[tokio::test]
+async fn cross_join_returns_cartesian_product() {
+    let db = seed().await;
+
+    // 3 users × 3 posts = 9 pairs; the User rows repeat per post.
+    let rows = User::query().cross_join::<Post>().all(&db).await.unwrap();
+    assert_eq!(rows.len(), 9);
+}
