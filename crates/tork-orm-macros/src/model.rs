@@ -17,13 +17,18 @@ use syn::{
     parse_macro_input,
 };
 
-use crate::common::{krate, option_inner, sql_type_for, to_snake};
+use crate::common::{
+    field_kind, is_timestamp_type, krate, option_inner, sql_type_for, to_snake, FieldKind,
+};
 
 /// Container options parsed from `#[table(...)]`.
 #[derive(Default)]
 struct TableArgs {
     name: Option<LitStr>,
     indexes: Vec<TableIndex>,
+    /// `hooks` suppresses the generated empty `ModelHooks` impl so the user can
+    /// provide their own.
+    hooks: bool,
 }
 
 /// One entry of `#[table(indexes = [...])]`.
@@ -80,6 +85,7 @@ impl Parse for TableArgs {
                         content.parse_terminated(TableIndex::parse, Token![,])?;
                     args.indexes = entries.into_iter().collect();
                 }
+                "hooks" => args.hooks = true,
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
@@ -341,6 +347,16 @@ impl VisitMut for FieldPathRewriter {
     }
 }
 
+/// A database-side default declared with `#[field(default_*/default=...)]`.
+enum FieldDefault {
+    /// `default_now` → `CURRENT_TIMESTAMP`.
+    Now,
+    /// `default_uuid` → `gen_random_uuid()`.
+    Uuid,
+    /// `default = "<sql>"` → verbatim SQL.
+    Raw(String),
+}
+
 /// Per-field options parsed from `#[field(...)]`.
 #[derive(Default)]
 struct FieldArgs {
@@ -353,6 +369,8 @@ struct FieldArgs {
     varchar_len: Option<u32>,
     foreign_key: Option<Path>,
     column: Option<String>,
+    /// A database-side default; the field is then omitted from `INSERT`.
+    default: Option<FieldDefault>,
 }
 
 impl Parse for FieldArgs {
@@ -399,6 +417,13 @@ impl Parse for FieldArgs {
                     input.parse::<Token![=]>()?;
                     let lit: LitStr = input.parse()?;
                     args.column = Some(lit.value());
+                }
+                "default_now" => args.default = Some(FieldDefault::Now),
+                "default_uuid" => args.default = Some(FieldDefault::Uuid),
+                "default" => {
+                    input.parse::<Token![=]>()?;
+                    let lit: LitStr = input.parse()?;
+                    args.default = Some(FieldDefault::Raw(lit.value()));
                 }
                 other => {
                     return Err(syn::Error::new(
@@ -488,6 +513,9 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         })
         .collect();
 
+    // The declared dialect (if any) gates PostgreSQL-only column types at compile time.
+    let declared = declared_dialect();
+
     for field in &named.named {
         let field_ident = field.ident.as_ref().expect("named field");
         let field_ty = &field.ty;
@@ -508,6 +536,28 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
 
         let nullable = option_inner(field_ty).is_some();
         let base_ty = option_inner(field_ty).unwrap_or(field_ty);
+
+        // Reject a PostgreSQL-only column type when the project declares a dialect that
+        // cannot support it (a no-op when no dialect is declared).
+        if let Some(dialect) = declared {
+            let unsupported = match field_kind(base_ty) {
+                FieldKind::Json if !dialect.supports_json() => Some("JSON"),
+                FieldKind::Uuid if !dialect.supports_uuid() => Some("UUID"),
+                FieldKind::Array if !dialect.supports_array() => Some("array"),
+                _ => None,
+            };
+            if let Some(name) = unsupported {
+                return Err(syn::Error::new_spanned(
+                    field_ty,
+                    format!(
+                        "{name} columns are not supported by the `{}` dialect declared in \
+                         [package.metadata.tork]",
+                        dialect.as_str()
+                    ),
+                ));
+            }
+        }
+
         let sql_type = match args.varchar_len {
             Some(length) => quote!(#krate::SqlType::Varchar(#length)),
             None => sql_type_for(base_ty),
@@ -549,6 +599,34 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             index_defs.push(field_index_tokens(&krate, &table_name, &column_name, false));
         }
 
+        // A database-side default: validate it against the field type, emit it on the
+        // ColumnDef, and (below) omit the column from INSERT so the database fills it.
+        let (default_tokens, has_default) = match &args.default {
+            None => (quote!(::core::option::Option::None), false),
+            Some(FieldDefault::Now) => {
+                if !is_timestamp_type(base_ty) {
+                    return Err(syn::Error::new_spanned(
+                        field_ty,
+                        "`default_now` requires a timestamp field (OffsetDateTime)",
+                    ));
+                }
+                (quote!(::core::option::Option::Some(#krate::ColumnDefault::CurrentTimestamp)), true)
+            }
+            Some(FieldDefault::Uuid) => {
+                if field_kind(base_ty) != FieldKind::Uuid {
+                    return Err(syn::Error::new_spanned(
+                        field_ty,
+                        "`default_uuid` requires a `Uuid` field",
+                    ));
+                }
+                (quote!(::core::option::Option::Some(#krate::ColumnDefault::Uuid)), true)
+            }
+            Some(FieldDefault::Raw(sql)) => (
+                quote!(::core::option::Option::Some(#krate::ColumnDefault::Raw(#sql))),
+                true,
+            ),
+        };
+
         column_defs.push(quote!(#krate::ColumnDef {
             name: #column_name,
             sql_type: #sql_type,
@@ -556,6 +634,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             auto: #auto_flag,
             nullable: #nullable,
             foreign_key: #foreign_key,
+            default: #default_tokens,
         }));
 
         // A typed column handle constant, used as `User::is_active`. Nullable
@@ -569,8 +648,9 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
 
         from_row_fields.push(quote!(#field_ident: row.get(#column_name)?));
 
-        // Auto-assigned columns are filled by the database, so they are not written.
-        if !auto_flag {
+        // Auto-assigned columns and DB-defaulted columns are filled by the database,
+        // so they are not written on insert.
+        if !auto_flag && !has_default {
             insert_entries.push(quote!(
                 (#column_name, #krate::BindValue::to_value(&self.#field_ident))
             ));
@@ -618,6 +698,14 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
     };
 
+    // Generate an empty `ModelHooks` impl (all no-ops) unless `#[table(hooks)]` was
+    // set, in which case the user provides their own.
+    let hooks_impl = if table_args.hooks {
+        quote!()
+    } else {
+        quote!(impl #krate::ModelHooks for #ident {})
+    };
+
     Ok(quote! {
         impl #ident {
             #(#column_consts)*
@@ -650,6 +738,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
 
             #indexes_fn
         }
+
+        #hooks_impl
 
         // Register the model so `migrate generate` can enumerate it. Expands to
         // nothing unless the `migrations` feature is enabled.

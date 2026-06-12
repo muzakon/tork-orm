@@ -76,6 +76,9 @@ impl Dialect for SqliteDialect {
             }
             SqlType::Timestamp => out.push_str("TIMESTAMP"),
             SqlType::Blob => out.push_str("BLOB"),
+            // SQLite has no native JSON/UUID/array types; a `sqlite`-declared project
+            // is rejected at compile time before reaching here. Map to TEXT defensively.
+            SqlType::Json | SqlType::Uuid | SqlType::Array(_) => out.push_str("TEXT"),
         }
     }
 

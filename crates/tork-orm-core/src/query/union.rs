@@ -19,9 +19,9 @@ use crate::query::queryset::QuerySet;
 ///
 /// ```no_run
 /// # use tork_orm_core::{Database, Model, Value};
-/// # struct User;
+/// # #[derive(Clone)] struct User;
 /// # impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } }
-/// # impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } }
+/// # impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } } impl tork_orm_core::ModelHooks for User {}
 /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
 /// let rows = User::query()
 ///     .filter(User::query().filter(tork_orm_core::Expr::Value(Value::Bool(true))).into_statement().filters.is_empty().then(|| tork_orm_core::Expr::Value(Value::Bool(true))).unwrap_or(tork_orm_core::Expr::Value(Value::Bool(false))))

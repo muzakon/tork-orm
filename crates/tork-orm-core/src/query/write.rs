@@ -10,30 +10,30 @@ use crate::value::Value;
 /// Controls what happens when an inserted row conflicts with an existing one.
 ///
 /// Used in [`InsertStatement`] and produced by [`Model::upsert`](crate::Model::upsert).
+/// The conflict clauses use portable `ON CONFLICT` syntax, accepted by both
+/// PostgreSQL and SQLite (≥ 3.24, which the bundled driver provides).
 #[derive(Debug, Clone, Default)]
 pub enum OnConflict {
-    /// Standard `INSERT INTO` — propagate the conflict as an error (default).
+    /// Plain `INSERT INTO` — propagate the conflict as an error (default).
     #[default]
     None,
-    /// `INSERT OR REPLACE INTO` — delete the conflicting row, then insert.
+    /// `ON CONFLICT (constraint) DO UPDATE SET ...` — update the existing row.
     ///
-    /// The conflicting row is deleted before the new one is inserted, so
-    /// auto-increment primary keys are re-assigned. Triggers and foreign-key
-    /// cascade rules on the deleted row fire as usual.
-    Replace,
-    /// `INSERT OR IGNORE INTO` — silently skip on conflict.
-    Ignore,
-    /// `ON CONFLICT (constraint) DO UPDATE SET ...` — PostgreSQL-style upsert.
-    ///
-    /// The conflict is resolved by running the given `updates` on the existing
-    /// row. The `constraint` columns name the unique/index columns that identify
-    /// a conflict. Backends without native `ON CONFLICT ... DO UPDATE` (SQLite
-    /// < 3.24) should render this as a fallback or error.
+    /// `constraint` names the conflict-target columns (a unique/primary key); the
+    /// `updates` are applied to the existing row, typically setting each column to
+    /// its [`EXCLUDED`](crate::Expr::excluded) (would-be-inserted) value.
     Update {
-        /// The conflict-target columns (e.g. the unique constraint columns).
+        /// The conflict-target columns.
         constraint: Vec<&'static str>,
-        /// The column assignments to apply when a conflict occurs.
+        /// The column assignments to apply on conflict.
         updates: Vec<Assignment>,
+    },
+    /// `ON CONFLICT (constraint) DO NOTHING` — skip the row on conflict.
+    ///
+    /// An empty `constraint` renders `ON CONFLICT DO NOTHING` (any conflict).
+    DoNothing {
+        /// The conflict-target columns, or empty for any conflict.
+        constraint: Vec<&'static str>,
     },
 }
 

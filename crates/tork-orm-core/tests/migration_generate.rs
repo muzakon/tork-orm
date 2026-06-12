@@ -19,6 +19,7 @@ fn col(name: &'static str, sql_type: SqlType, nullable: bool) -> ColumnDef {
         auto: false,
         nullable,
         foreign_key: None,
+        default: None,
     }
 }
 
@@ -30,6 +31,7 @@ fn pk_col(name: &'static str) -> ColumnDef {
         auto: true,
         nullable: false,
         foreign_key: None,
+        default: None,
     }
 }
 

@@ -32,3 +32,4 @@ tork = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 time = { workspace = true, features = ["macros"] }
+uuid = { workspace = true }

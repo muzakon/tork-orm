@@ -35,21 +35,79 @@ fn is_ident(ty: &Type, name: &str) -> bool {
     matches!(ty, Type::Path(path) if path.path.segments.last().is_some_and(|s| s.ident == name))
 }
 
-/// Returns `true` if `ty` is `Vec<u8>`.
+/// Returns the inner type of `Vec<T>`, or `None` for any other type.
+fn vec_inner(ty: &Type) -> Option<&Type> {
+    let Type::Path(path) = ty else {
+        return None;
+    };
+    let segment = path.path.segments.last()?;
+    if segment.ident != "Vec" {
+        return None;
+    }
+    let PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return None;
+    };
+    args.args.iter().find_map(|arg| match arg {
+        GenericArgument::Type(inner) => Some(inner),
+        _ => None,
+    })
+}
+
+/// Returns `true` if `ty` is `Vec<u8>` (a blob, not an array).
 fn is_byte_vec(ty: &Type) -> bool {
+    vec_inner(ty).is_some_and(|inner| is_ident(inner, "u8"))
+}
+
+/// Returns `true` if `ty` is a JSON type: the `tork_orm::Json` alias or
+/// `serde_json::Value`.
+fn is_json(ty: &Type) -> bool {
+    if is_ident(ty, "Json") {
+        return true;
+    }
     let Type::Path(path) = ty else {
         return false;
     };
-    let Some(segment) = path.path.segments.last() else {
-        return false;
-    };
-    if segment.ident != "Vec" {
-        return false;
+    let is_value = path.path.segments.last().is_some_and(|s| s.ident == "Value");
+    let from_serde_json = path.path.segments.iter().any(|s| s.ident == "serde_json");
+    is_value && from_serde_json
+}
+
+/// Returns `true` if `ty` is a UUID type (`uuid::Uuid` or an imported `Uuid`).
+fn is_uuid(ty: &Type) -> bool {
+    is_ident(ty, "Uuid")
+}
+
+/// The category of a column type, for dialect-capability validation.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FieldKind {
+    /// A JSON column (PostgreSQL-only).
+    Json,
+    /// A UUID column (PostgreSQL-only).
+    Uuid,
+    /// An array column (PostgreSQL-only).
+    Array,
+    /// Any other column type, supported everywhere.
+    Other,
+}
+
+/// Returns `true` if `ty` is a timestamp type (`OffsetDateTime` / `DateTimeUtc`).
+pub fn is_timestamp_type(ty: &Type) -> bool {
+    is_ident(ty, "OffsetDateTime") || is_ident(ty, "DateTimeUtc")
+}
+
+/// Classifies a field's (option-unwrapped) type for dialect validation.
+pub fn field_kind(ty: &Type) -> FieldKind {
+    if is_json(ty) {
+        FieldKind::Json
+    } else if is_uuid(ty) {
+        FieldKind::Uuid
+    } else if is_byte_vec(ty) {
+        FieldKind::Other
+    } else if vec_inner(ty).is_some() {
+        FieldKind::Array
+    } else {
+        FieldKind::Other
     }
-    let PathArguments::AngleBracketed(args) = &segment.arguments else {
-        return false;
-    };
-    args.args.iter().any(|arg| matches!(arg, GenericArgument::Type(inner) if is_ident(inner, "u8")))
 }
 
 /// Maps a Rust field type (the inner type for an `Option`) to a `SqlType`
@@ -67,6 +125,13 @@ pub fn sql_type_for(ty: &Type) -> TokenStream {
         quote!(#krate::SqlType::Real)
     } else if is_byte_vec(ty) {
         quote!(#krate::SqlType::Blob)
+    } else if is_json(ty) {
+        quote!(#krate::SqlType::Json)
+    } else if is_uuid(ty) {
+        quote!(#krate::SqlType::Uuid)
+    } else if let Some(inner) = vec_inner(ty) {
+        let inner_type = sql_type_for(inner);
+        quote!(#krate::SqlType::Array(&#inner_type))
     } else if is_ident(ty, "OffsetDateTime") || is_ident(ty, "DateTimeUtc") {
         quote!(#krate::SqlType::Timestamp)
     } else {

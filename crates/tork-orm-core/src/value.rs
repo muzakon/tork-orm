@@ -39,6 +39,12 @@ pub enum Value {
     Blob(Vec<u8>),
     /// A timestamp, rendered to and parsed from RFC 3339 text by default.
     Timestamp(OffsetDateTime),
+    /// A JSON document (PostgreSQL `json`/`jsonb`).
+    Json(serde_json::Value),
+    /// A UUID (PostgreSQL `uuid`).
+    Uuid(uuid::Uuid),
+    /// An array of values (PostgreSQL `type[]`), each element a [`Value`].
+    Array(Vec<Value>),
 }
 
 impl Value {
@@ -119,6 +125,48 @@ impl BindValue for OffsetDateTime {
         Value::Timestamp(*self)
     }
 }
+
+impl BindValue for serde_json::Value {
+    fn to_value(&self) -> Value {
+        Value::Json(self.clone())
+    }
+}
+
+impl BindValue for uuid::Uuid {
+    fn to_value(&self) -> Value {
+        Value::Uuid(*self)
+    }
+}
+
+/// Generates `BindValue`/`FromValue` for `Vec<T>` as a SQL array, for each listed
+/// element type.
+///
+/// These are concrete (not a blanket `impl<T> ... for Vec<T>`) so they never overlap
+/// with the `Vec<u8>` blob impl: `Vec<u8>` stays a blob, `Vec<i64>`/`Vec<String>`/…
+/// become arrays.
+macro_rules! impl_array_value {
+    ($($element:ty),+ $(,)?) => {$(
+        impl BindValue for Vec<$element> {
+            fn to_value(&self) -> Value {
+                Value::Array(self.iter().map(BindValue::to_value).collect())
+            }
+        }
+
+        impl FromValue for Vec<$element> {
+            fn from_value(value: Value) -> crate::Result<Self> {
+                match value {
+                    Value::Array(items) => items
+                        .into_iter()
+                        .map(<$element as FromValue>::from_value)
+                        .collect(),
+                    other => Err(mismatch(concat!("Vec<", stringify!($element), ">"), &other)),
+                }
+            }
+        }
+    )+};
+}
+
+impl_array_value!(i32, i64, f64, bool, String);
 
 impl<T: BindValue> BindValue for Option<T> {
     fn to_value(&self) -> Value {
@@ -214,6 +262,30 @@ impl FromValue for OffsetDateTime {
             Value::Text(s) => OffsetDateTime::parse(&s, &time::format_description::well_known::Rfc3339)
                 .map_err(|_| crate::OrmError::conversion("invalid RFC 3339 timestamp")),
             other => Err(mismatch("OffsetDateTime", &other)),
+        }
+    }
+}
+
+impl FromValue for serde_json::Value {
+    fn from_value(value: Value) -> crate::Result<Self> {
+        match value {
+            Value::Json(j) => Ok(j),
+            // A backend without a native JSON type may return it as text.
+            Value::Text(s) => serde_json::from_str(&s)
+                .map_err(|_| crate::OrmError::conversion("invalid JSON text")),
+            other => Err(mismatch("serde_json::Value", &other)),
+        }
+    }
+}
+
+impl FromValue for uuid::Uuid {
+    fn from_value(value: Value) -> crate::Result<Self> {
+        match value {
+            Value::Uuid(u) => Ok(u),
+            // A backend without a native UUID type may return it as text.
+            Value::Text(s) => uuid::Uuid::parse_str(&s)
+                .map_err(|_| crate::OrmError::conversion("invalid UUID text")),
+            other => Err(mismatch("uuid::Uuid", &other)),
         }
     }
 }

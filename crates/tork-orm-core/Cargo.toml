@@ -11,13 +11,14 @@ description = "Core runtime for the Tork ORM: dialect-agnostic query model, type
 [dependencies]
 tokio = { workspace = true }
 time = { workspace = true, features = ["formatting", "parsing", "macros"] }
+serde_json = { workspace = true }
+uuid = { workspace = true }
 rusqlite = { workspace = true, optional = true }
 tokio-postgres = { workspace = true, optional = true }
 deadpool-postgres = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 tork-core = { workspace = true, optional = true }
 inventory = { workspace = true, optional = true }
-uuid = { workspace = true, optional = true }
 
 [features]
 default = ["sqlite", "tork", "migrations"]
@@ -32,7 +33,7 @@ mysql = []
 # Schema migrations (the migration engine) and `migrate generate`. The link-time
 # model registry that generate enumerates pulls in `inventory`; generated
 # migration files get revision ids from `uuid`.
-migrations = ["dep:inventory", "dep:uuid"]
+migrations = ["dep:inventory"]
 # Native integration with the Tork web framework (error bridge and resource
 # injection). Disable for a standalone async ORM.
 tork = ["dep:tork-core"]

@@ -98,6 +98,11 @@ impl<'a> QueryWriter<'a> {
                 }
                 self.sql.push('\'');
             }
+            // PostgreSQL-specific values do not appear in the inline-literal contexts
+            // (index predicates, DDL defaults); render a defensive quoted text form.
+            Value::Json(json) => quote_string_literal(&json.to_string(), &mut self.sql),
+            Value::Uuid(uuid) => quote_string_literal(&uuid.to_string(), &mut self.sql),
+            Value::Array(items) => quote_string_literal(&format!("{items:?}"), &mut self.sql),
         }
     }
 
@@ -193,6 +198,12 @@ impl<'a> QueryWriter<'a> {
                 self.push_sql(if *negated { "NOT EXISTS (" } else { "EXISTS (" });
                 self.write_select(subquery);
                 self.sql.push(')');
+            }
+            Expr::Excluded(column) => {
+                // `EXCLUDED` is a keyword pseudo-table, left unquoted; the column is
+                // quoted normally. Accepted by PostgreSQL and SQLite (≥ 3.24).
+                self.push_sql("EXCLUDED.");
+                self.push_identifier(column);
             }
         }
     }
@@ -393,14 +404,19 @@ impl<'a> QueryWriter<'a> {
         self.sql.push(')');
     }
 
+    /// Renders a comma-separated list of quoted conflict-target columns.
+    fn render_conflict_target(&mut self, columns: &[&'static str]) {
+        for (index, column) in columns.iter().enumerate() {
+            if index != 0 {
+                self.push_sql(", ");
+            }
+            self.push_identifier(column);
+        }
+    }
+
     /// Renders an `INSERT` statement.
     pub fn write_insert(&mut self, statement: &InsertStatement) {
-        match &statement.on_conflict {
-            OnConflict::None    => self.push_sql("INSERT INTO "),
-            OnConflict::Replace => self.push_sql("INSERT OR REPLACE INTO "),
-            OnConflict::Ignore  => self.push_sql("INSERT OR IGNORE INTO "),
-            OnConflict::Update { .. } => self.push_sql("INSERT INTO "),
-        }
+        self.push_sql("INSERT INTO ");
         self.push_identifier(statement.table);
         self.push_sql(" (");
         for (index, column) in statement.columns.iter().enumerate() {
@@ -423,22 +439,29 @@ impl<'a> QueryWriter<'a> {
             }
             self.sql.push(')');
         }
-        if let OnConflict::Update { constraint, updates } = &statement.on_conflict {
-            self.push_sql(" ON CONFLICT (");
-            for (index, col) in constraint.iter().enumerate() {
-                if index != 0 {
-                    self.push_sql(", ");
+        match &statement.on_conflict {
+            OnConflict::None => {}
+            OnConflict::Update { constraint, updates } => {
+                self.push_sql(" ON CONFLICT (");
+                self.render_conflict_target(constraint);
+                self.push_sql(") DO UPDATE SET ");
+                for (index, assignment) in updates.iter().enumerate() {
+                    if index != 0 {
+                        self.push_sql(", ");
+                    }
+                    self.push_identifier(assignment.column);
+                    self.push_sql(" = ");
+                    self.write_expr(&assignment.value);
                 }
-                self.push_identifier(col);
             }
-            self.push_sql(") DO UPDATE SET ");
-            for (index, assignment) in updates.iter().enumerate() {
-                if index != 0 {
-                    self.push_sql(", ");
+            OnConflict::DoNothing { constraint } => {
+                self.push_sql(" ON CONFLICT ");
+                if !constraint.is_empty() {
+                    self.sql.push('(');
+                    self.render_conflict_target(constraint);
+                    self.push_sql(") ");
                 }
-                self.push_identifier(assignment.column);
-                self.push_sql(" = ");
-                self.write_expr(&assignment.value);
+                self.push_sql("DO NOTHING");
             }
         }
         if !statement.returning.is_empty() {

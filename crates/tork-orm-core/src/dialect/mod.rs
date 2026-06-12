@@ -61,6 +61,15 @@ pub enum SqlType {
     Timestamp,
     /// Raw bytes.
     Blob,
+    /// A JSON document (PostgreSQL `jsonb`).
+    Json,
+    /// A UUID (PostgreSQL `uuid`).
+    Uuid,
+    /// An array of the given element type (PostgreSQL `element[]`).
+    ///
+    /// A `&'static` reference rather than a `Box` so [`SqlType`] stays `Copy`; the
+    /// derive const-promotes the inner type.
+    Array(&'static SqlType),
 }
 
 /// Generates backend-specific SQL.

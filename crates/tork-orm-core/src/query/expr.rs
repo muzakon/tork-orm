@@ -68,6 +68,14 @@ pub enum BinaryOp {
     /// On SQLite, rendered as `lower(col) LIKE lower(pattern)` since SQLite has
     /// no native ILIKE keyword. This covers non-ASCII Unicode correctly.
     ILike,
+    /// `->` — JSON field/element access returning JSON (PostgreSQL).
+    JsonGet,
+    /// `->>` — JSON field/element access returning text (PostgreSQL).
+    JsonGetText,
+    /// `@>` — left contains right (PostgreSQL JSON and array containment).
+    Contains,
+    /// `&&` — overlaps (PostgreSQL arrays share at least one element).
+    Overlap,
 }
 
 impl BinaryOp {
@@ -87,6 +95,10 @@ impl BinaryOp {
             BinaryOp::Mod => "%",
             BinaryOp::Like => "LIKE",
             BinaryOp::ILike => "ILIKE",
+            BinaryOp::JsonGet => "->",
+            BinaryOp::JsonGetText => "->>",
+            BinaryOp::Contains => "@>",
+            BinaryOp::Overlap => "&&",
         }
     }
 }
@@ -230,6 +242,9 @@ pub enum Expr {
         /// `true` → `NOT EXISTS`.
         negated: bool,
     },
+    /// A reference to a column of the `EXCLUDED` pseudo-table in an
+    /// `ON CONFLICT ... DO UPDATE` clause (the would-be-inserted row).
+    Excluded(&'static str),
 }
 
 /// Builder for a `CASE WHEN` expression.
@@ -284,6 +299,11 @@ impl Expr {
     /// Builds a bound value.
     pub fn value(value: Value) -> Self {
         Expr::Value(value)
+    }
+
+    /// Builds a reference to `EXCLUDED.<column>` for an upsert's update clause.
+    pub fn excluded(column: &'static str) -> Self {
+        Expr::Excluded(column)
     }
 
     /// Builds a binary comparison.

@@ -443,6 +443,62 @@ impl<M> Column<M, String> {
     }
 }
 
+/// JSON column operators (PostgreSQL `jsonb`).
+impl<M> Column<M, serde_json::Value> {
+    /// `column -> key` — extracts a JSON field by name, as JSON.
+    pub fn json_get(self, key: &str) -> Expr {
+        Expr::binary(
+            self.expr(),
+            BinaryOp::JsonGet,
+            Expr::value(Value::Text(key.to_string())),
+        )
+    }
+
+    /// `column ->> key` — extracts a JSON field by name, as text.
+    ///
+    /// Returns a text-valued expression; chain a comparison such as `.eq("active")`
+    /// to use it as a filter.
+    pub fn json_get_text(self, key: &str) -> Expr {
+        Expr::binary(
+            self.expr(),
+            BinaryOp::JsonGetText,
+            Expr::value(Value::Text(key.to_string())),
+        )
+    }
+
+    /// `column @> value` — tests whether the JSON document contains `value`.
+    pub fn json_contains(self, value: serde_json::Value) -> Expr {
+        Expr::binary(self.expr(), BinaryOp::Contains, Expr::value(Value::Json(value)))
+    }
+}
+
+/// Array column operators (PostgreSQL `element[]`).
+///
+/// Bounding on `T: BindValue` excludes `Vec<u8>` blob columns (`u8` is not
+/// `BindValue`), which therefore get none of these methods.
+impl<M, T: BindValue> Column<M, Vec<T>> {
+    /// `value = ANY(column)` — tests whether the array contains `value`.
+    pub fn any(self, value: T) -> Expr {
+        Expr::binary(
+            Expr::value(value.to_value()),
+            BinaryOp::Eq,
+            Expr::func("ANY", [self.expr()]),
+        )
+    }
+
+    /// `column @> items` — tests whether the array contains every one of `items`.
+    pub fn array_contains(self, items: impl IntoIterator<Item = T>) -> Expr {
+        let array = Value::Array(items.into_iter().map(|item| item.to_value()).collect());
+        Expr::binary(self.expr(), BinaryOp::Contains, Expr::value(array))
+    }
+
+    /// `column && items` — tests whether the array overlaps `items` (shares any element).
+    pub fn overlaps(self, items: impl IntoIterator<Item = T>) -> Expr {
+        let array = Value::Array(items.into_iter().map(|item| item.to_value()).collect());
+        Expr::binary(self.expr(), BinaryOp::Overlap, Expr::value(array))
+    }
+}
+
 impl<M, T> Clone for Column<M, T> {
     fn clone(&self) -> Self {
         *self

@@ -335,6 +335,9 @@ fn value_key(value: &Value) -> String {
         Value::Text(s) => format!("t:{s}"),
         Value::Blob(bytes) => format!("x:{bytes:?}"),
         Value::Timestamp(ts) => format!("ts:{ts:?}"),
+        Value::Uuid(u) => format!("u:{u}"),
+        Value::Json(j) => format!("j:{j}"),
+        Value::Array(items) => format!("a:{items:?}"),
     }
 }
 

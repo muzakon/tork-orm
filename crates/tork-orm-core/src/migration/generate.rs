@@ -17,7 +17,9 @@ use crate::error::OrmError;
 use crate::executor::Executor;
 use crate::registry::{registered_models, TableSchema};
 
-use super::ddl::{AlterAction, AlterTable, ColumnSpec, ForeignKeyAction, ForeignKeySpec, TableDef};
+use super::ddl::{
+    AlterAction, AlterTable, ColumnSpec, DefaultValue, ForeignKeyAction, ForeignKeySpec, TableDef,
+};
 use super::introspect::ExistingColumn;
 use super::{files, introspect, render};
 
@@ -147,6 +149,7 @@ pub async fn generate<E: Executor + Sync>(
                 // PRIMARY KEY and AUTO_INCREMENT cannot be used in ADD COLUMN.
                 spec.primary_key = false;
                 spec.auto_increment = false;
+                spec.default = column_default_ddl(model_col.default);
                 if !model_col.nullable {
                     // NOT NULL without a default fails on non-empty tables; emit
                     // the column as nullable and let the developer fill values and
@@ -267,6 +270,15 @@ fn push_statement(out: &mut String, statement: &str) {
 }
 
 /// Builds a `CREATE TABLE` definition from a model's reflected schema.
+/// Maps a model column's database-side default to a DDL [`DefaultValue`].
+fn column_default_ddl(default: Option<crate::ColumnDefault>) -> Option<DefaultValue> {
+    match default? {
+        crate::ColumnDefault::CurrentTimestamp => Some(DefaultValue::CurrentTimestamp),
+        crate::ColumnDefault::Uuid => Some(DefaultValue::Raw("gen_random_uuid()".to_string())),
+        crate::ColumnDefault::Raw(sql) => Some(DefaultValue::Raw(sql.to_string())),
+    }
+}
+
 fn table_def_from_schema(schema: &TableSchema) -> TableDef {
     let mut def = TableDef::new(schema.table);
     for column in &schema.columns {
@@ -274,6 +286,7 @@ fn table_def_from_schema(schema: &TableSchema) -> TableDef {
         spec.nullable = column.nullable;
         spec.primary_key = column.primary_key;
         spec.auto_increment = column.auto;
+        spec.default = column_default_ddl(column.default);
         def.columns.push(spec);
         if let Some(foreign_key) = column.foreign_key {
             def.foreign_keys.push(ForeignKeySpec {

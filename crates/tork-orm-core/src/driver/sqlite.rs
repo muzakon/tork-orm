@@ -249,6 +249,12 @@ impl ToSql for Value {
             Value::Text(s) => SqliteValue::Text(s.clone()),
             Value::Blob(b) => SqliteValue::Blob(b.clone()),
             Value::Timestamp(ts) => SqliteValue::Text(format_timestamp(ts)?),
+            // PostgreSQL-specific values: SQLite has no native types for these, and
+            // a `sqlite`-declared project is rejected at compile time before reaching
+            // here. Store a defensive text form for any value built directly.
+            Value::Json(j) => SqliteValue::Text(j.to_string()),
+            Value::Uuid(u) => SqliteValue::Text(u.to_string()),
+            Value::Array(items) => SqliteValue::Text(format!("{items:?}")),
         };
         Ok(ToSqlOutput::Owned(value))
     }

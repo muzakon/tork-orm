@@ -45,7 +45,7 @@ pub use executor::Executor;
 pub use index::{IndexColumn, IndexDef, NullsOrder};
 #[cfg(feature = "migrations")]
 pub use registry::{registered_models, ModelSchemaEntry, TableSchema};
-pub use model::{ColumnDef, ForeignKeyDef, FromRow, Model};
+pub use model::{ColumnDef, ColumnDefault, ForeignKeyDef, FromRow, Model, ModelHooks};
 pub use preload::{Preloaded, Preloader};
 pub use query::ast::{Join, JoinKind, OrderItem, SelectItem, SelectStatement, UnionStatement};
 pub use query::UnionQuery;
@@ -58,6 +58,14 @@ pub use query::{Page, QuerySet};
 pub use relation::{Relation, RelationKind};
 pub use row::Row;
 pub use value::{BindValue, FromValue, Value};
+
+// Re-exports so models and queries can name PostgreSQL-specific column types without
+// adding the underlying crates to their own dependencies.
+pub use serde_json;
+pub use uuid;
+
+/// A JSON column value (PostgreSQL `jsonb`). An alias for [`serde_json::Value`].
+pub type Json = serde_json::Value;
 
 pub use driver::ExecuteResult;
 

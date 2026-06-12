@@ -240,22 +240,25 @@ async fn upsert_inserts_when_no_conflict() {
 }
 
 #[tokio::test]
-async fn upsert_replaces_conflicting_row_on_unique_key() {
+async fn upsert_on_updates_conflicting_row_on_unique_key() {
     let db = empty_db().await;
     // Insert alice first (auto-id assigned).
-    let _ = User::create(&db, &new_user("alice")).await.unwrap();
+    let original = User::create(&db, &new_user("alice")).await.unwrap();
 
-    // Upsert the same username (UNIQUE constraint) with a different email.
-    // INSERT OR REPLACE deletes the conflicting row and inserts the new one.
-    let replaced = User::upsert(
+    // Upsert on the username (UNIQUE) target with a different email: the existing
+    // row is updated in place (ON CONFLICT (username) DO UPDATE).
+    let updated = User::upsert_on(
         &db,
         &User { id: 0, username: "alice".into(), email: "alice2@example.com".into(), is_active: false },
+        &["username"],
     )
     .await
     .unwrap();
-    assert_eq!(replaced.username, "alice");
-    assert_eq!(replaced.email, "alice2@example.com");
-    assert!(!replaced.is_active);
+    assert_eq!(updated.username, "alice");
+    assert_eq!(updated.email, "alice2@example.com");
+    assert!(!updated.is_active);
+    // DO UPDATE keeps the existing row (and its id) rather than reinserting.
+    assert_eq!(updated.id, original.id);
 
     // Still exactly one alice row in the table.
     assert_eq!(User::query().count(&db).await.unwrap(), 1);

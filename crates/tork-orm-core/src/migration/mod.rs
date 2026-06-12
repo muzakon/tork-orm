@@ -60,11 +60,16 @@ pub use crate::index::{IndexColumn, IndexDef, NullsOrder};
 pub use files::{head_revision, Applied, FileMigrator, FileStatus};
 pub use registry::{boxed, MigrationSet, MigrationTrait, MigrationTransaction};
 pub use runner::{MigrationStatus, Migrator, OnMismatch};
-pub use schema::{Column, CreateTable, DropTable, DynExecutor, ForeignKey, SchemaManager};
+pub use schema::{
+    Column, CreateTable, CreateTrigger, DropTable, DropTrigger, DynExecutor, ForeignKey,
+    SchemaManager, TriggerEvent, TriggerTiming,
+};
 
 /// The common imports for writing a migration.
 pub mod prelude {
-    pub use super::{Column, ForeignKey, ForeignKeyAction, SchemaManager};
+    pub use super::{
+        Column, ForeignKey, ForeignKeyAction, SchemaManager, TriggerEvent, TriggerTiming,
+    };
     pub use crate::dialect::DialectKind;
     pub use crate::Result;
 }

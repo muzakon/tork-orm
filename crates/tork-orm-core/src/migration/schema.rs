@@ -176,6 +176,35 @@ impl<'e> SchemaManager<'e> {
         }
     }
 
+    /// Begins a `CREATE TRIGGER` named `name`.
+    ///
+    /// A thin convenience that renders the trigger header (`CREATE TRIGGER <name>
+    /// <timing> <event> ON <table> [FOR EACH ROW]`) followed by a raw action body.
+    /// Trigger bodies are dialect-specific (PostgreSQL `EXECUTE FUNCTION f()`,
+    /// SQLite `BEGIN ... END`), so the body is the caller's responsibility — as is
+    /// any function the trigger calls, created via [`raw`](Self::raw).
+    pub fn create_trigger(&mut self, name: &str) -> CreateTrigger<'_, 'e> {
+        CreateTrigger {
+            schema: self,
+            name: name.to_string(),
+            timing: TriggerTiming::Before,
+            event: TriggerEvent::Insert,
+            table: String::new(),
+            for_each_row: false,
+            body: String::new(),
+        }
+    }
+
+    /// Begins a `DROP TRIGGER` for the trigger named `name`.
+    pub fn drop_trigger(&mut self, name: &str) -> DropTrigger<'_, 'e> {
+        DropTrigger {
+            schema: self,
+            name: name.to_string(),
+            table: None,
+            if_exists: false,
+        }
+    }
+
     /// Runs verbatim SQL. The caller owns its correctness and escaping.
     pub async fn raw(&mut self, sql: &str) -> crate::Result<()> {
         self.dispatch(vec![sql.to_string()]).await
@@ -259,6 +288,186 @@ impl DropTable<'_, '_> {
     pub async fn execute(self) -> crate::Result<()> {
         let statement = render::drop_table(self.schema.dialect, &self.name, self.if_exists);
         self.schema.dispatch(vec![statement]).await
+    }
+}
+
+/// When a trigger fires relative to the row event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TriggerTiming {
+    /// `BEFORE` the event.
+    Before,
+    /// `AFTER` the event.
+    After,
+}
+
+impl TriggerTiming {
+    fn as_sql(self) -> &'static str {
+        match self {
+            TriggerTiming::Before => "BEFORE",
+            TriggerTiming::After => "AFTER",
+        }
+    }
+}
+
+/// The row event a trigger fires on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TriggerEvent {
+    /// `INSERT`.
+    Insert,
+    /// `UPDATE`.
+    Update,
+    /// `DELETE`.
+    Delete,
+}
+
+impl TriggerEvent {
+    fn as_sql(self) -> &'static str {
+        match self {
+            TriggerEvent::Insert => "INSERT",
+            TriggerEvent::Update => "UPDATE",
+            TriggerEvent::Delete => "DELETE",
+        }
+    }
+}
+
+/// A `CREATE TRIGGER` builder.
+///
+/// # Examples
+///
+/// ```
+/// use tork_orm_core::dialect::PostgresDialect;
+/// use tork_orm_core::migration::{SchemaManager, TriggerEvent};
+///
+/// # async fn run() -> tork_orm_core::Result<()> {
+/// let dialect = PostgresDialect::new();
+/// let mut schema = SchemaManager::collect(&dialect);
+/// schema
+///     .create_trigger("set_updated_at")
+///     .before()
+///     .event(TriggerEvent::Update)
+///     .on("users")
+///     .for_each_row()
+///     .body("EXECUTE FUNCTION touch_updated_at()")
+///     .execute()
+///     .await?;
+/// assert_eq!(
+///     schema.into_collected()[0],
+///     "CREATE TRIGGER \"set_updated_at\" BEFORE UPDATE ON \"users\" \
+///FOR EACH ROW EXECUTE FUNCTION touch_updated_at()"
+/// );
+/// # Ok(())
+/// # }
+/// ```
+pub struct CreateTrigger<'a, 'e> {
+    schema: &'a mut SchemaManager<'e>,
+    name: String,
+    timing: TriggerTiming,
+    event: TriggerEvent,
+    table: String,
+    for_each_row: bool,
+    body: String,
+}
+
+impl CreateTrigger<'_, '_> {
+    /// Sets the firing time.
+    pub fn timing(mut self, timing: TriggerTiming) -> Self {
+        self.timing = timing;
+        self
+    }
+
+    /// Sugar for `BEFORE`.
+    pub fn before(self) -> Self {
+        self.timing(TriggerTiming::Before)
+    }
+
+    /// Sugar for `AFTER`.
+    pub fn after(self) -> Self {
+        self.timing(TriggerTiming::After)
+    }
+
+    /// Sets the row event.
+    pub fn event(mut self, event: TriggerEvent) -> Self {
+        self.event = event;
+        self
+    }
+
+    /// Sets the table the trigger is attached to.
+    pub fn on(mut self, table: &str) -> Self {
+        self.table = table.to_string();
+        self
+    }
+
+    /// Adds `FOR EACH ROW`.
+    pub fn for_each_row(mut self) -> Self {
+        self.for_each_row = true;
+        self
+    }
+
+    /// Sets the raw, dialect-specific action body (e.g. PostgreSQL
+    /// `EXECUTE FUNCTION f()` or SQLite `BEGIN ... END`).
+    pub fn body(mut self, body: &str) -> Self {
+        self.body = body.to_string();
+        self
+    }
+
+    /// Renders and applies the `CREATE TRIGGER`.
+    pub async fn execute(self) -> crate::Result<()> {
+        let mut sql = String::from("CREATE TRIGGER ");
+        self.schema.dialect.quote_identifier(&self.name, &mut sql);
+        sql.push(' ');
+        sql.push_str(self.timing.as_sql());
+        sql.push(' ');
+        sql.push_str(self.event.as_sql());
+        sql.push_str(" ON ");
+        self.schema.dialect.quote_identifier(&self.table, &mut sql);
+        if self.for_each_row {
+            sql.push_str(" FOR EACH ROW");
+        }
+        if !self.body.is_empty() {
+            sql.push(' ');
+            sql.push_str(&self.body);
+        }
+        self.schema.dispatch(vec![sql]).await
+    }
+}
+
+/// A `DROP TRIGGER` builder.
+pub struct DropTrigger<'a, 'e> {
+    schema: &'a mut SchemaManager<'e>,
+    name: String,
+    table: Option<String>,
+    if_exists: bool,
+}
+
+impl DropTrigger<'_, '_> {
+    /// Adds `IF EXISTS`.
+    pub fn if_exists(mut self) -> Self {
+        self.if_exists = true;
+        self
+    }
+
+    /// Names the table the trigger is on (required by PostgreSQL: `DROP TRIGGER
+    /// name ON table`; ignored by SQLite).
+    pub fn on(mut self, table: &str) -> Self {
+        self.table = Some(table.to_string());
+        self
+    }
+
+    /// Renders and applies the `DROP TRIGGER`.
+    pub async fn execute(self) -> crate::Result<()> {
+        let mut sql = String::from("DROP TRIGGER ");
+        if self.if_exists {
+            sql.push_str("IF EXISTS ");
+        }
+        self.schema.dialect.quote_identifier(&self.name, &mut sql);
+        // PostgreSQL requires the table; SQLite does not accept it.
+        if self.schema.dialect.kind() == DialectKind::Postgres {
+            if let Some(table) = &self.table {
+                sql.push_str(" ON ");
+                self.schema.dialect.quote_identifier(table, &mut sql);
+            }
+        }
+        self.schema.dispatch(vec![sql]).await
     }
 }
 

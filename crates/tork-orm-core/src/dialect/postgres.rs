@@ -77,6 +77,12 @@ impl Dialect for PostgresDialect {
             }
             SqlType::Timestamp => out.push_str("TIMESTAMP WITH TIME ZONE"),
             SqlType::Blob => out.push_str("BYTEA"),
+            SqlType::Json => out.push_str("JSONB"),
+            SqlType::Uuid => out.push_str("UUID"),
+            SqlType::Array(inner) => {
+                self.map_sql_type(*inner, out);
+                out.push_str("[]");
+            }
         }
     }
 

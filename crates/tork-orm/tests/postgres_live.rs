@@ -12,9 +12,12 @@
 //! parallel.
 #![cfg(feature = "postgres")]
 
+use serde_json::json;
 use time::macros::datetime;
 use time::OffsetDateTime;
+use tork_orm::migration::{SchemaManager, TriggerEvent};
 use tork_orm::prelude::*;
+use uuid::Uuid;
 
 /// The connection URL for the test database.
 fn database_url() -> String {
@@ -289,4 +292,322 @@ async fn savepoint_rolls_back_inner_only() {
     let rows = db.fetch_all("SELECT amount FROM pg_savepoint".into(), vec![]).await.unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].get::<i64>("amount").unwrap(), 1);
+}
+
+// ── JSON / JSONB ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Model)]
+#[table(name = "pg_events")]
+struct Event {
+    #[field(primary_key, auto)]
+    id: i64,
+    payload: serde_json::Value,
+}
+
+#[tokio::test]
+async fn jsonb_round_trip_and_operators() {
+    let db = connect().await;
+    reset(
+        &db,
+        "DROP TABLE IF EXISTS pg_events",
+        "CREATE TABLE pg_events (id BIGSERIAL PRIMARY KEY, payload JSONB NOT NULL)",
+    )
+    .await;
+
+    let stored = Event::create(
+        &db,
+        &Event { id: 0, payload: json!({"kind": "click", "vip": true, "n": 3}) },
+    )
+    .await
+    .unwrap();
+    Event::create(
+        &db,
+        &Event { id: 0, payload: json!({"kind": "view", "vip": false}) },
+    )
+    .await
+    .unwrap();
+
+    // The JSON document round-trips exactly.
+    let reloaded = Event::query().filter(Event::id.eq(stored.id)).one(&db).await.unwrap();
+    assert_eq!(reloaded.payload, json!({"kind": "click", "vip": true, "n": 3}));
+
+    // `payload ->> 'kind' = 'click'`
+    let clicks = Event::query()
+        .filter(Event::payload.json_get_text("kind").eq("click"))
+        .all(&db)
+        .await
+        .unwrap();
+    assert_eq!(clicks.len(), 1);
+    assert_eq!(clicks[0].payload["kind"], json!("click"));
+
+    // `payload @> '{"vip": true}'`
+    let vips = Event::query()
+        .filter(Event::payload.json_contains(json!({"vip": true})))
+        .count(&db)
+        .await
+        .unwrap();
+    assert_eq!(vips, 1);
+}
+
+// ── UUID ──────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Model, PartialEq)]
+#[table(name = "pg_sessions")]
+struct Session {
+    #[field(primary_key)]
+    id: Uuid,
+    label: String,
+}
+
+#[tokio::test]
+async fn uuid_primary_key_insert_and_query() {
+    let db = connect().await;
+    reset(
+        &db,
+        "DROP TABLE IF EXISTS pg_sessions",
+        "CREATE TABLE pg_sessions (id UUID PRIMARY KEY, label TEXT NOT NULL)",
+    )
+    .await;
+
+    let id = Uuid::new_v4();
+    let created = Session::create(&db, &Session { id, label: "first".into() }).await.unwrap();
+    assert_eq!(created.id, id);
+
+    let found = Session::query().filter(Session::id.eq(id)).one(&db).await.unwrap();
+    assert_eq!(found, Session { id, label: "first".into() });
+
+    let missing = Session::query()
+        .filter(Session::id.eq(Uuid::new_v4()))
+        .first(&db)
+        .await
+        .unwrap();
+    assert!(missing.is_none());
+}
+
+// ── Arrays ────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Model, PartialEq)]
+#[table(name = "pg_posts")]
+struct Post {
+    #[field(primary_key, auto)]
+    id: i64,
+    tags: Vec<String>,
+    scores: Vec<i64>,
+}
+
+#[tokio::test]
+async fn array_round_trip_and_operators() {
+    let db = connect().await;
+    reset(
+        &db,
+        "DROP TABLE IF EXISTS pg_posts",
+        "CREATE TABLE pg_posts (\
+            id BIGSERIAL PRIMARY KEY, \
+            tags TEXT[] NOT NULL, \
+            scores BIGINT[] NOT NULL)",
+    )
+    .await;
+
+    let stored = Post::create(
+        &db,
+        &Post { id: 0, tags: vec!["rust".into(), "db".into()], scores: vec![10, 20] },
+    )
+    .await
+    .unwrap();
+    Post::create(
+        &db,
+        &Post { id: 0, tags: vec!["go".into(), "web".into()], scores: vec![5] },
+    )
+    .await
+    .unwrap();
+
+    // Arrays round-trip element-for-element.
+    let reloaded = Post::query().filter(Post::id.eq(stored.id)).one(&db).await.unwrap();
+    assert_eq!(reloaded.tags, vec!["rust".to_string(), "db".to_string()]);
+    assert_eq!(reloaded.scores, vec![10, 20]);
+
+    // `'rust' = ANY(tags)`
+    let rusty = Post::query().filter(Post::tags.any("rust".to_string())).all(&db).await.unwrap();
+    assert_eq!(rusty.len(), 1);
+    assert_eq!(rusty[0].id, stored.id);
+
+    // `tags && ARRAY['web','mobile']` — overlaps the second post.
+    let overlapping = Post::query()
+        .filter(Post::tags.overlaps(["web".to_string(), "mobile".to_string()]))
+        .count(&db)
+        .await
+        .unwrap();
+    assert_eq!(overlapping, 1);
+
+    // `tags @> ARRAY['rust','db']` — contains both.
+    let both = Post::query()
+        .filter(Post::tags.array_contains(["rust".to_string(), "db".to_string()]))
+        .count(&db)
+        .await
+        .unwrap();
+    assert_eq!(both, 1);
+}
+
+// ── Upsert (ON CONFLICT) ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Model, PartialEq)]
+#[table(name = "pg_accounts2")]
+struct Acct {
+    #[field(primary_key, auto)]
+    id: i64,
+    #[field(varchar(length = 50))]
+    email: String,
+    balance: i64,
+}
+
+#[tokio::test]
+async fn upsert_on_inserts_then_updates() {
+    let db = connect().await;
+    reset(
+        &db,
+        "DROP TABLE IF EXISTS pg_accounts2",
+        "CREATE TABLE pg_accounts2 (\
+            id BIGSERIAL PRIMARY KEY, \
+            email VARCHAR(50) NOT NULL UNIQUE, \
+            balance BIGINT NOT NULL)",
+    )
+    .await;
+
+    // First upsert inserts.
+    let first = Acct::upsert_on(
+        &db,
+        &Acct { id: 0, email: "a@x.com".into(), balance: 100 },
+        &["email"],
+    )
+    .await
+    .unwrap();
+    assert!(first.id > 0);
+    assert_eq!(first.balance, 100);
+
+    // Second upsert on the same email updates the existing row in place.
+    let updated = Acct::upsert_on(
+        &db,
+        &Acct { id: 0, email: "a@x.com".into(), balance: 250 },
+        &["email"],
+    )
+    .await
+    .unwrap();
+    assert_eq!(updated.id, first.id);
+    assert_eq!(updated.balance, 250);
+    assert_eq!(Acct::query().count(&db).await.unwrap(), 1);
+}
+
+// ── DB-side defaults (server-generated) ───────────────────────────────────────
+
+#[derive(Debug, Clone, Model, PartialEq)]
+#[table(name = "pg_tokens")]
+struct Token {
+    #[field(primary_key, default_uuid)]
+    id: Uuid,
+    label: String,
+}
+
+#[tokio::test]
+async fn default_uuid_is_generated_by_the_database() {
+    let db = connect().await;
+    reset(
+        &db,
+        "DROP TABLE IF EXISTS pg_tokens",
+        "CREATE TABLE pg_tokens (\
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(), \
+            label TEXT NOT NULL)",
+    )
+    .await;
+
+    // The id is constructed nil but omitted from INSERT; the server fills it.
+    let stored = Token::create(&db, &Token { id: Uuid::nil(), label: "first".into() })
+        .await
+        .unwrap();
+    assert_ne!(stored.id, Uuid::nil());
+    assert_eq!(stored.label, "first");
+
+    let found = Token::query().filter(Token::id.eq(stored.id)).one(&db).await.unwrap();
+    assert_eq!(found, stored);
+}
+
+#[derive(Debug, Clone, Model)]
+#[table(name = "pg_audit")]
+struct Audit {
+    #[field(primary_key, auto)]
+    id: i64,
+    action: String,
+    #[field(default_now)]
+    at: OffsetDateTime,
+}
+
+#[tokio::test]
+async fn default_now_is_filled_by_the_server() {
+    let db = connect().await;
+    reset(
+        &db,
+        "DROP TABLE IF EXISTS pg_audit",
+        "CREATE TABLE pg_audit (\
+            id BIGSERIAL PRIMARY KEY, \
+            action TEXT NOT NULL, \
+            at TIMESTAMPTZ NOT NULL DEFAULT now())",
+    )
+    .await;
+
+    // `at` is omitted from INSERT; the server stamps it with now().
+    let stored = Audit::create(
+        &db,
+        &Audit { id: 0, action: "login".into(), at: OffsetDateTime::UNIX_EPOCH },
+    )
+    .await
+    .unwrap();
+    // The server time is far after the epoch placeholder we passed.
+    assert!(stored.at.year() >= 2025);
+}
+
+// ── Trigger DSL (end to end) ──────────────────────────────────────────────────
+
+#[tokio::test]
+async fn create_trigger_fires_on_insert() {
+    let db = connect().await;
+    db.execute("DROP TABLE IF EXISTS pg_trig".into(), vec![]).await.unwrap();
+    db.execute(
+        "CREATE TABLE pg_trig (id BIGSERIAL PRIMARY KEY, name TEXT NOT NULL, name_upper TEXT)".into(),
+        vec![],
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "CREATE OR REPLACE FUNCTION pg_trig_upper() RETURNS trigger AS $$ \
+         BEGIN NEW.name_upper := upper(NEW.name); RETURN NEW; END; $$ LANGUAGE plpgsql"
+            .into(),
+        vec![],
+    )
+    .await
+    .unwrap();
+
+    // Build the trigger through the DSL and apply the rendered SQL.
+    let mut schema = SchemaManager::collect(&**db.dialect());
+    schema
+        .create_trigger("pg_trig_t")
+        .before()
+        .event(TriggerEvent::Insert)
+        .on("pg_trig")
+        .for_each_row()
+        .body("EXECUTE FUNCTION pg_trig_upper()")
+        .execute()
+        .await
+        .unwrap();
+    for sql in schema.into_collected() {
+        db.execute(sql, vec![]).await.unwrap();
+    }
+
+    db.execute(
+        "INSERT INTO pg_trig (name) VALUES ($1)".into(),
+        vec![Value::Text("hello".into())],
+    )
+    .await
+    .unwrap();
+
+    let rows = db.fetch_all("SELECT name_upper FROM pg_trig".into(), vec![]).await.unwrap();
+    assert_eq!(rows[0].get::<String>("name_upper").unwrap(), "HELLO");
 }

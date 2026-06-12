@@ -163,6 +163,9 @@ fn read_row(row: &tokio_postgres::Row) -> crate::Result<Row> {
 /// `NULL` to [`Value::Null`].
 fn read_value(row: &tokio_postgres::Row, index: usize) -> crate::Result<Value> {
     let ty = row.columns()[index].type_();
+    if let tokio_postgres::types::Kind::Array(element) = ty.kind() {
+        return read_array(row, index, element);
+    }
     let value = if *ty == Type::BOOL {
         get_opt::<bool>(row, index)?.map_or(Value::Null, Value::Bool)
     } else if *ty == Type::INT2 {
@@ -179,9 +182,54 @@ fn read_value(row: &tokio_postgres::Row, index: usize) -> crate::Result<Value> {
         get_opt::<Vec<u8>>(row, index)?.map_or(Value::Null, Value::Blob)
     } else if *ty == Type::TIMESTAMPTZ {
         get_opt::<time::OffsetDateTime>(row, index)?.map_or(Value::Null, Value::Timestamp)
+    } else if *ty == Type::JSON || *ty == Type::JSONB {
+        get_opt::<serde_json::Value>(row, index)?.map_or(Value::Null, Value::Json)
+    } else if *ty == Type::UUID {
+        get_opt::<uuid::Uuid>(row, index)?.map_or(Value::Null, Value::Uuid)
     } else {
         // TEXT, VARCHAR, BPCHAR, NAME, and anything else: read as text.
         get_opt::<String>(row, index)?.map_or(Value::Null, Value::Text)
+    };
+    Ok(value)
+}
+
+/// Reads an array column into a [`Value::Array`], mapping each element by the array's
+/// element type. A `NULL` array column becomes [`Value::Null`].
+fn read_array(row: &tokio_postgres::Row, index: usize, element: &Type) -> crate::Result<Value> {
+    /// Reads `Option<Vec<Option<$t>>>` and wraps each element with `$wrap`.
+    macro_rules! read_elements {
+        ($t:ty, $wrap:expr) => {{
+            let column: Option<Vec<Option<$t>>> = row
+                .try_get(index)
+                .map_err(|e| OrmError::conversion(format!("cannot read array column {index}")).with_source(e))?;
+            match column {
+                None => Value::Null,
+                Some(items) => Value::Array(
+                    items
+                        .into_iter()
+                        .map(|item| item.map_or(Value::Null, $wrap))
+                        .collect(),
+                ),
+            }
+        }};
+    }
+
+    let value = if *element == Type::BOOL {
+        read_elements!(bool, Value::Bool)
+    } else if *element == Type::INT2 {
+        read_elements!(i16, |n| Value::Int(i64::from(n)))
+    } else if *element == Type::INT4 {
+        read_elements!(i32, |n| Value::Int(i64::from(n)))
+    } else if *element == Type::INT8 {
+        read_elements!(i64, Value::Int)
+    } else if *element == Type::FLOAT4 {
+        read_elements!(f32, |n| Value::Real(f64::from(n)))
+    } else if *element == Type::FLOAT8 {
+        read_elements!(f64, Value::Real)
+    } else if *element == Type::UUID {
+        read_elements!(uuid::Uuid, Value::Uuid)
+    } else {
+        read_elements!(String, Value::Text)
     };
     Ok(value)
 }
@@ -224,6 +272,11 @@ impl ToSql for Value {
             Value::Text(s) => s.to_sql(ty, out),
             Value::Blob(b) => b.to_sql(ty, out),
             Value::Timestamp(t) => t.to_sql(ty, out),
+            Value::Json(j) => j.to_sql(ty, out),
+            Value::Uuid(u) => u.to_sql(ty, out),
+            // tokio-postgres's blanket `ToSql for Vec<T>` frames the array and
+            // recurses into each element's `Value::to_sql` with the element type.
+            Value::Array(items) => items.to_sql(ty, out),
         }
     }
 

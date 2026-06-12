@@ -23,7 +23,7 @@ use crate::query::write::{Assignment, DeleteStatement, UpdateStatement};
 /// ```no_run
 /// use tork_orm_core::{Database, Model};
 /// # use tork_orm_core::{Row, Value};
-/// # struct User;
+/// # #[derive(Clone)] struct User;
 /// # impl tork_orm_core::FromRow for User {
 /// #     fn from_row(_: &Row) -> tork_orm_core::Result<Self> { Ok(User) }
 /// # }
@@ -34,6 +34,7 @@ use crate::query::write::{Assignment, DeleteStatement, UpdateStatement};
 /// #     fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] }
 /// #     fn primary_key_value(&self) -> Value { Value::Null }
 /// # }
+/// # impl tork_orm_core::ModelHooks for User {}
 /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
 /// let users = User::query().limit(20).all(&db).await?;
 /// # let _ = users;
@@ -56,7 +57,7 @@ pub struct QuerySet<M: Model> {
 ///
 /// ```no_run
 /// # use tork_orm_core::query::Page;
-/// # struct User;
+/// # #[derive(Clone)] struct User;
 /// let page = Page::<User> {
 ///     items: vec![],
 ///     total: 0,
@@ -114,9 +115,9 @@ impl<M: Model> QuerySet<M> {
     ///
     /// ```no_run
     /// # use tork_orm_core::{Database, Model, Value};
-    /// # struct User;
+    /// # #[derive(Clone)] struct User;
     /// # impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } }
-    /// # impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } }
+    /// # impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } } impl tork_orm_core::ModelHooks for User {}
     /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
     /// let users = User::query()
     ///     .filter_raw("LENGTH(username) > ?", [5_i64])
@@ -358,7 +359,7 @@ impl<M: Model> QuerySet<M> {
     ///
     /// ```no_run
     /// # use tork_orm_core::{Database, Model, Value};
-    /// # struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } }
+    /// # #[derive(Clone)] struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } } impl tork_orm_core::ModelHooks for User {}
     /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
     /// let rows = User::query()
     ///     .filter(User::query().into_statement().filters.is_empty().then_some(tork_orm_core::Expr::CountStar).unwrap_or(tork_orm_core::Expr::CountStar))
@@ -441,7 +442,7 @@ impl<M: Model> QuerySet<M> {
     ///
     /// ```no_run
     /// # use tork_orm_core::{Database, Model, Value};
-    /// # struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } }
+    /// # #[derive(Clone)] struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } } impl tork_orm_core::ModelHooks for User {}
     /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
     /// let user: Option<User> = User::query()
     ///     .filter(User::query().into_statement().filters.is_empty().then_some(tork_orm_core::Expr::CountStar).unwrap_or(tork_orm_core::Expr::CountStar))
@@ -488,7 +489,7 @@ impl<M: Model> QuerySet<M> {
     ///
     /// ```no_run
     /// # use tork_orm_core::{Database, Model, Value, query::Page};
-    /// # struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } }
+    /// # #[derive(Clone)] struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } } impl tork_orm_core::ModelHooks for User {}
     /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
     /// let page: Page<User> = User::query()
     ///     .order_by(User::query().into_statement().filters.is_empty().then_some(tork_orm_core::OrderItem::new(tork_orm_core::Expr::Value(Value::Int(0)), false)).unwrap_or(tork_orm_core::OrderItem::new(tork_orm_core::Expr::Value(Value::Int(0)), false)))
@@ -576,7 +577,7 @@ impl<M: Model> QuerySet<M> {
     ///
     /// ```no_run
     /// # use tork_orm_core::{Database, Model, Value};
-    /// # struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } }
+    /// # #[derive(Clone)] struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } } impl tork_orm_core::ModelHooks for User {}
     /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
     /// let batches = User::query().chunk(&db, 100).await?;
     /// for batch in batches {
@@ -627,7 +628,7 @@ impl<M: Model> QuerySet<M> {
     ///
     /// ```no_run
     /// # use tork_orm_core::{Database, Model, Value};
-    /// # struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } }
+    /// # #[derive(Clone)] struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } } impl tork_orm_core::ModelHooks for User {}
     /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
     /// let names: Vec<String> = User::query()
     ///     .filter(User::query().into_statement().filters.is_empty().then_some(tork_orm_core::Expr::CountStar).unwrap_or(tork_orm_core::Expr::CountStar))

@@ -1191,7 +1191,10 @@ dependencies = [
  "bytes",
  "fallible-iterator 0.2.0",
  "postgres-protocol",
+ "serde_core",
+ "serde_json",
  "time",
+ "uuid",
 ]
 
 [[package]]
@@ -1947,6 +1950,7 @@ dependencies = [
  "tork",
  "tork-orm-core",
  "tork-orm-macros",
+ "uuid",
 ]
 
 [[package]]
@@ -1977,6 +1981,7 @@ dependencies = [
  "deadpool-postgres",
  "inventory",
  "rusqlite",
+ "serde_json",
  "tempfile",
  "time",
  "tokio",

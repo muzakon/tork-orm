@@ -71,6 +71,21 @@ impl ConfigDialect {
         matches!(self, Self::Postgres)
     }
 
+    /// Whether the dialect has a native JSON column type.
+    pub fn supports_json(self) -> bool {
+        matches!(self, Self::Postgres)
+    }
+
+    /// Whether the dialect has a native UUID column type.
+    pub fn supports_uuid(self) -> bool {
+        matches!(self, Self::Postgres)
+    }
+
+    /// Whether the dialect has native array column types.
+    pub fn supports_array(self) -> bool {
+        matches!(self, Self::Postgres)
+    }
+
     /// Returns the human-readable name of the first index feature in use that this
     /// dialect does not support, or `None` when every used feature is supported.
     ///
