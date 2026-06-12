@@ -140,12 +140,89 @@ fn default_metadata_is_recorded_on_columns() {
 
 #[derive(Debug, Clone, Model)]
 #[table(name = "events")]
+#[allow(dead_code)]
 struct Event {
     #[field(primary_key, auto)]
     id: i64,
     kind: String,
     #[field(default_now)]
     created_at: time::OffsetDateTime,
+}
+
+// ── Client-side defaults ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Model)]
+#[table(name = "tickets")]
+struct Ticket {
+    #[field(primary_key, default_with = "uuid::Uuid::new_v4()")]
+    id: uuid::Uuid,
+    code: String,
+    #[field(default_with = "\"normal\".to_string()")]
+    severity: String,
+    #[field(default_with = "1")]
+    weight: i32,
+    #[field(default_with = "\"open\".to_string()")]
+    note: Option<String>,
+}
+
+async fn ticket_db() -> Database {
+    let db = Database::connect(":memory:", 1).await.unwrap();
+    db.execute(
+        "CREATE TABLE tickets (id TEXT PRIMARY KEY, code TEXT NOT NULL, severity TEXT NOT NULL, weight INTEGER NOT NULL, note TEXT)".into(),
+        vec![],
+    )
+    .await
+    .unwrap();
+    db
+}
+
+#[tokio::test]
+async fn client_defaults_fill_unset_fields() {
+    let db = ticket_db().await;
+    let stored = Ticket::create(
+        &db,
+        &Ticket {
+            id: uuid::Uuid::nil(),
+            code: "BUG-1".into(),
+            severity: String::new(),
+            weight: 0,
+            note: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    // Empty fields were filled by their `default_with` expressions.
+    assert_ne!(stored.id, uuid::Uuid::nil());
+    assert_eq!(stored.severity, "normal");
+    assert_eq!(stored.weight, 1);
+    assert_eq!(stored.note.as_deref(), Some("open"));
+    // The explicitly-set field is untouched.
+    assert_eq!(stored.code, "BUG-1");
+}
+
+#[tokio::test]
+async fn client_defaults_preserve_explicit_values() {
+    let db = ticket_db().await;
+    let id = uuid::Uuid::new_v4();
+    let stored = Ticket::create(
+        &db,
+        &Ticket {
+            id,
+            code: "BUG-2".into(),
+            severity: "high".into(),
+            weight: 9,
+            note: Some("triaged".into()),
+        },
+    )
+    .await
+    .unwrap();
+
+    // Every explicitly-set field is preserved (no overwrite).
+    assert_eq!(stored.id, id);
+    assert_eq!(stored.severity, "high");
+    assert_eq!(stored.weight, 9);
+    assert_eq!(stored.note.as_deref(), Some("triaged"));
 }
 
 #[test]

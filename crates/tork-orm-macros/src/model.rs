@@ -371,6 +371,9 @@ struct FieldArgs {
     column: Option<String>,
     /// A database-side default; the field is then omitted from `INSERT`.
     default: Option<FieldDefault>,
+    /// A client-side default: a Rust expression applied to an unset field before
+    /// insert. The field is still written.
+    default_with: Option<syn::Expr>,
 }
 
 impl Parse for FieldArgs {
@@ -424,6 +427,13 @@ impl Parse for FieldArgs {
                     input.parse::<Token![=]>()?;
                     let lit: LitStr = input.parse()?;
                     args.default = Some(FieldDefault::Raw(lit.value()));
+                }
+                "default_with" => {
+                    input.parse::<Token![=]>()?;
+                    // The expression is given as a string literal and parsed, so it
+                    // never collides with the attribute's own comma separators.
+                    let lit: LitStr = input.parse()?;
+                    args.default_with = Some(lit.parse()?);
                 }
                 other => {
                     return Err(syn::Error::new(
@@ -491,6 +501,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     let mut column_consts: Vec<TokenStream2> = Vec::new();
     let mut from_row_fields: Vec<TokenStream2> = Vec::new();
     let mut insert_entries: Vec<TokenStream2> = Vec::new();
+    // Statements that fill client-side `default_with` fields when they are unset.
+    let mut client_default_stmts: Vec<TokenStream2> = Vec::new();
     let mut primary_key: Option<(Ident, String)> = None;
     // Indexes built from the field-level attributes (`unique`/`index`) plus the
     // automatic index on each foreign key.
@@ -627,6 +639,33 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             ),
         };
 
+        // A client-side default fills the field in Rust before insert, when it is
+        // still at its empty value. It is mutually exclusive with a DB-side default.
+        if let Some(expr) = &args.default_with {
+            if args.default.is_some() {
+                return Err(syn::Error::new_spanned(
+                    field_ty,
+                    "`default_with` (client-side) and `default`/`default_now`/`default_uuid` \
+                     (database-side) cannot both be set on one field",
+                ));
+            }
+            // `Option<T>` is unset when `None` (then wrapped in `Some`); any other
+            // type is unset when it equals `Default::default()`.
+            if option_inner(field_ty).is_some() {
+                client_default_stmts.push(quote!(
+                    if self.#field_ident.is_none() {
+                        self.#field_ident = ::core::option::Option::Some(#expr);
+                    }
+                ));
+            } else {
+                client_default_stmts.push(quote!(
+                    if self.#field_ident == <#field_ty as ::core::default::Default>::default() {
+                        self.#field_ident = #expr;
+                    }
+                ));
+            }
+        }
+
         column_defs.push(quote!(#krate::ColumnDef {
             name: #column_name,
             sql_type: #sql_type,
@@ -698,6 +737,17 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
     };
 
+    // Only override `Model::apply_client_defaults` when a field declares one.
+    let client_defaults_fn = if client_default_stmts.is_empty() {
+        quote!()
+    } else {
+        quote! {
+            fn apply_client_defaults(&mut self) {
+                #(#client_default_stmts)*
+            }
+        }
+    };
+
     // Generate an empty `ModelHooks` impl (all no-ops) unless `#[table(hooks)]` was
     // set, in which case the user provides their own.
     let hooks_impl = if table_args.hooks {
@@ -735,6 +785,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             fn primary_key_value(&self) -> #krate::Value {
                 #krate::BindValue::to_value(&self.#pk_field)
             }
+
+            #client_defaults_fn
 
             #indexes_fn
         }
