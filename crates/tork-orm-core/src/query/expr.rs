@@ -5,6 +5,8 @@
 //! of bound parameters by a [`Dialect`](crate::dialect::Dialect). Keeping the AST
 //! backend-neutral is what lets one set of queries target any dialect.
 
+use std::fmt;
+
 use crate::query::ast::{OrderItem, SelectStatement};
 use crate::value::{BindValue, Value};
 
@@ -51,6 +53,168 @@ impl AggFunc {
             AggFunc::BoolAnd => "bool_and",
             AggFunc::BoolOr => "bool_or",
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Window function types
+// ---------------------------------------------------------------------------
+
+/// A bound in a window frame clause (`ROWS BETWEEN start AND end` /
+/// `RANGE BETWEEN start AND end`).
+#[derive(Debug, Clone)]
+pub enum WindowBound {
+    /// `UNBOUNDED PRECEDING`
+    UnboundedPreceding,
+    /// `value PRECEDING` — an expression (typically a literal integer).
+    Preceding(Box<Expr>),
+    /// `CURRENT ROW`
+    CurrentRow,
+    /// `value FOLLOWING` — an expression (typically a literal integer).
+    Following(Box<Expr>),
+    /// `UNBOUNDED FOLLOWING`
+    UnboundedFollowing,
+}
+
+impl fmt::Display for WindowBound {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WindowBound::UnboundedPreceding => f.write_str("UNBOUNDED PRECEDING"),
+            WindowBound::Preceding(_) => f.write_str("PRECEDING"),
+            WindowBound::CurrentRow => f.write_str("CURRENT ROW"),
+            WindowBound::Following(_) => f.write_str("FOLLOWING"),
+            WindowBound::UnboundedFollowing => f.write_str("UNBOUNDED FOLLOWING"),
+        }
+    }
+}
+
+/// The unit of a window frame: `ROWS`, `RANGE`, or `GROUPS`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowFrameUnit {
+    /// `ROWS` — frame is defined by physical row offsets.
+    Rows,
+    /// `RANGE` — frame is defined by a value range relative to the current row.
+    Range,
+    /// `GROUPS` — frame is defined by groups of peers.
+    Groups,
+}
+
+impl fmt::Display for WindowFrameUnit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WindowFrameUnit::Rows => f.write_str("ROWS"),
+            WindowFrameUnit::Range => f.write_str("RANGE"),
+            WindowFrameUnit::Groups => f.write_str("GROUPS"),
+        }
+    }
+}
+
+/// A `ROWS BETWEEN` / `RANGE BETWEEN` frame clause.
+#[derive(Debug, Clone)]
+pub struct WindowFrame {
+    /// `ROWS`, `RANGE`, or `GROUPS`.
+    pub unit: WindowFrameUnit,
+    /// The start bound. Defaults to `UNBOUNDED PRECEDING` when not specified.
+    pub start: WindowBound,
+    /// The optional end bound. When `None` the frame is `start AND CURRENT ROW`
+    /// (or just `start` when that implies `CURRENT ROW` in the SQL shorthand).
+    /// When `Some(end)` the frame is `BETWEEN start AND end`.
+    pub end: Option<WindowBound>,
+}
+
+/// The `OVER` clause of a window function.
+#[derive(Debug, Clone)]
+pub struct Window {
+    /// `PARTITION BY` expressions.
+    pub partition_by: Vec<Expr>,
+    /// `ORDER BY` terms.
+    pub order_by: Vec<OrderItem>,
+    /// An optional frame clause (`ROWS BETWEEN …` / `RANGE BETWEEN …`).
+    pub frame: Option<WindowFrame>,
+}
+
+impl Default for Window {
+    fn default() -> Self {
+        Self {
+            partition_by: Vec::new(),
+            order_by: Vec::new(),
+            frame: None,
+        }
+    }
+}
+
+/// Builder for a `OVER (…)` clause attached to an expression.
+///
+/// Created by [`Expr::over`]. Finalize with [`end`](ExprOver::end).
+///
+/// # Examples
+///
+/// ```
+/// use tork_orm_core::query::expr::{AggFunc, Expr};
+/// let expr = Expr::aggregate(AggFunc::Count, [Expr::column("t", "c")])
+///     .over().end();
+/// # let _ = expr;
+/// ```
+pub struct ExprOver {
+    expr: Expr,
+    window: Window,
+}
+
+impl ExprOver {
+    /// Sets `PARTITION BY` columns.
+    pub fn partition_by(mut self, cols: impl IntoIterator<Item = Expr>) -> Self {
+        self.window.partition_by = cols.into_iter().collect();
+        self
+    }
+
+    /// Sets `ORDER BY` terms.
+    pub fn order_by(mut self, terms: impl IntoIterator<Item = OrderItem>) -> Self {
+        self.window.order_by = terms.into_iter().collect();
+        self
+    }
+
+    /// Sets a `ROWS BETWEEN` frame.
+    pub fn rows_between(mut self, start: WindowBound, end: WindowBound) -> Self {
+        self.window.frame = Some(WindowFrame {
+            unit: WindowFrameUnit::Rows,
+            start,
+            end: Some(end),
+        });
+        self
+    }
+
+    /// Sets a `RANGE BETWEEN` frame.
+    pub fn range_between(mut self, start: WindowBound, end: WindowBound) -> Self {
+        self.window.frame = Some(WindowFrame {
+            unit: WindowFrameUnit::Range,
+            start,
+            end: Some(end),
+        });
+        self
+    }
+
+    /// Sets a `GROUPS BETWEEN` frame.
+    pub fn groups_between(mut self, start: WindowBound, end: WindowBound) -> Self {
+        self.window.frame = Some(WindowFrame {
+            unit: WindowFrameUnit::Groups,
+            start,
+            end: Some(end),
+        });
+        self
+    }
+
+    /// Finalizes and returns the `Expr::Over` node.
+    pub fn end(self) -> Expr {
+        Expr::Over {
+            expr: Box::new(self.expr),
+            window: Box::new(self.window),
+        }
+    }
+}
+
+impl From<ExprOver> for Expr {
+    fn from(over: ExprOver) -> Self {
+        over.end()
     }
 }
 
@@ -293,6 +457,18 @@ pub enum Expr {
     /// A reference to a column of the `EXCLUDED` pseudo-table in an
     /// `ON CONFLICT ... DO UPDATE` clause (the would-be-inserted row).
     Excluded(&'static str),
+    /// A window function: `expr OVER (window_spec)`.
+    ///
+    /// The inner expression is typically an [`Aggregate`] or a [`Func`]. The
+    /// `OVER` clause turns any aggregate into a window function; pure window
+    /// functions (`ROW_NUMBER`, `RANK`, …) are represented as `Func` nodes
+    /// wrapped in this variant.
+    Over {
+        /// The windowed expression.
+        expr: Box<Expr>,
+        /// The `OVER` clause specification.
+        window: Box<Window>,
+    },
 }
 
 /// Builder for a `CASE WHEN` expression.
@@ -525,6 +701,28 @@ impl Expr {
     /// [`QuerySet::filter_raw`](crate::QuerySet) instead.
     pub fn raw(sql: impl Into<String>) -> Self {
         Expr::Raw { sql: sql.into(), params: Vec::new() }
+    }
+
+    /// Wraps this expression in an `OVER (…)` clause, turning it into a window
+    /// function.
+    ///
+    /// Returns an [`ExprOver`] builder so partition, order, and frame can be
+    /// chained before finalizing with [`end`](ExprOver::end).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tork_orm_core::query::expr::{AggFunc, Expr};
+    /// // count(*) OVER ()
+    /// let expr = Expr::aggregate(AggFunc::Count, [Expr::column("t", "c")])
+    ///     .over().end();
+    /// # let _ = expr;
+    /// ```
+    pub fn over(self) -> ExprOver {
+        ExprOver {
+            expr: self,
+            window: Window::default(),
+        }
     }
 
     /// Builds `EXISTS (SELECT ...)` — true when the subquery returns any row.

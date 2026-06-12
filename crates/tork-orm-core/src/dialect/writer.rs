@@ -7,7 +7,7 @@
 
 use crate::dialect::Dialect;
 use crate::query::ast::{JoinKind, SelectItem, SelectStatement, UnionStatement};
-use crate::query::expr::Expr;
+use crate::query::expr::{Expr, WindowBound};
 use crate::query::write::{DeleteStatement, InsertStatement, OnConflict, UpdateStatement};
 use crate::value::Value;
 
@@ -215,6 +215,75 @@ impl<'a> QueryWriter<'a> {
                 self.push_sql("EXCLUDED.");
                 self.push_identifier(column);
             }
+            Expr::Over { expr, window } => {
+                self.write_expr(expr);
+                self.push_sql(" OVER (");
+                let mut needs_space = false;
+
+                if !window.partition_by.is_empty() {
+                    self.push_sql("PARTITION BY ");
+                    for (i, col) in window.partition_by.iter().enumerate() {
+                        if i != 0 {
+                            self.push_sql(", ");
+                        }
+                        self.write_expr(col);
+                    }
+                    needs_space = true;
+                }
+
+                if !window.order_by.is_empty() {
+                    if needs_space {
+                        self.sql.push(' ');
+                    }
+                    self.push_sql("ORDER BY ");
+                    for (i, term) in window.order_by.iter().enumerate() {
+                        if i != 0 {
+                            self.push_sql(", ");
+                        }
+                        self.write_expr(&term.expr);
+                        self.push_sql(if term.descending { " DESC" } else { " ASC" });
+                        if let Some(nulls_first) = term.nulls {
+                            self.push_sql(if nulls_first { " NULLS FIRST" } else { " NULLS LAST" });
+                        }
+                    }
+                    needs_space = true;
+                }
+
+                if let Some(frame) = &window.frame {
+                    if needs_space {
+                        self.sql.push(' ');
+                    }
+                    self.push_sql(&frame.unit.to_string());
+                    self.push_sql(" BETWEEN ");
+                    self.write_window_bound(&frame.start);
+                    self.push_sql(" AND ");
+                    if let Some(end) = &frame.end {
+                        self.write_window_bound(end);
+                    } else {
+                        self.push_sql("CURRENT ROW");
+                    }
+                }
+
+                self.sql.push(')');
+            }
+        }
+    }
+
+    /// Writes a single window frame bound (value part only — the unit keyword
+    /// like `ROWS`/`RANGE` is written separately).
+    fn write_window_bound(&mut self, bound: &WindowBound) {
+        match bound {
+            WindowBound::UnboundedPreceding => self.push_sql("UNBOUNDED PRECEDING"),
+            WindowBound::Preceding(expr) => {
+                self.write_expr(expr);
+                self.push_sql(" PRECEDING");
+            }
+            WindowBound::CurrentRow => self.push_sql("CURRENT ROW"),
+            WindowBound::Following(expr) => {
+                self.write_expr(expr);
+                self.push_sql(" FOLLOWING");
+            }
+            WindowBound::UnboundedFollowing => self.push_sql("UNBOUNDED FOLLOWING"),
         }
     }
 

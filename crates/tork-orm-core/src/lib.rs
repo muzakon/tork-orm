@@ -50,12 +50,18 @@ pub use preload::{Preloaded, Preloader};
 pub use query::ast::{Join, JoinKind, OrderItem, SelectItem, SelectStatement, UnionStatement};
 pub use query::UnionQuery;
 pub use query::column::{Column, IntoAssignExpr, IntoSqlValue, Numeric};
-pub use query::expr::{AggFunc, BinaryOp, CaseWhen, Expr, LogicalOp};
+pub use query::expr::{
+    AggFunc, BinaryOp, CaseWhen, Expr, ExprOver, LogicalOp, Window, WindowBound, WindowFrame,
+    WindowFrameUnit,
+};
 pub use query::func::{
-    abs, array_aggregation, bool_and, bool_or, ceil, coalesce, concat, floor, func,
-    greatest, json_aggregation, jsonb_aggregation, least, left, length, lower, nullif,
-    position, random_value, regex_match, regex_replace, repeat, replace, reverse, right,
-    round, split_part, string_aggregation, substr, substr_len, trim, upper,
+    abs, ceil, coalesce, concat, floor, func, greatest, least, length, lower, nullif,
+    position, random_value, replace, round, substr, substr_len, trim, upper,
+};
+#[cfg(feature = "postgres")]
+pub use query::func::{
+    array_aggregation, bool_and, bool_or, json_aggregation, jsonb_aggregation, left,
+    regex_match, regex_replace, repeat, reverse, right, split_part, string_aggregation,
 };
 pub use query::projection::{ExprTuple, IntoExpr, IntoSelectItem, Projection};
 pub use query::write::{Assignment, DeleteStatement, InsertStatement, OnConflict, UpdateStatement};

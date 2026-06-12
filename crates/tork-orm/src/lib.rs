@@ -143,14 +143,20 @@ macro_rules! transaction {
 /// error type.
 pub mod prelude {
     pub use crate::{
-        abs, array_aggregation, bool_and, bool_or, ceil, coalesce, concat, floor, func,
-        greatest, json_aggregation, jsonb_aggregation, least, left, length, lower, nullif,
-        position, random_value, regex_match, regex_replace, repeat, replace, reverse, right,
-        round, split_part, string_aggregation, substr, substr_len, trim, upper,
+        abs, ceil, coalesce, concat, floor, func, greatest, least, length, lower, nullif,
+        position, random_value, replace, round, substr, substr_len, trim, upper,
+    };
+    #[cfg(feature = "postgres")]
+    pub use crate::{
+        array_aggregation, bool_and, bool_or, json_aggregation, jsonb_aggregation, left,
+        regex_match, regex_replace, repeat, reverse, right, split_part, string_aggregation,
+    };
+    pub use crate::{
         Assignment, BindValue, BoxFuture, Column,
-        ColumnDef, ColumnDefault, Database, ErrorKind, Executor, Expr, ForeignKeyDef, FromRow, FromValue,
+        ColumnDef, ColumnDefault, Database, ErrorKind, Executor, Expr, ExprOver, ForeignKeyDef, FromRow, FromValue,
         IndexColumn, IndexDef, IsolationLevel, Json, Model, ModelHooks, OrderItem, OrmError, Preloaded, QuerySet,
         Relation, RelationKind, Result, Row, SqlType, Transaction, TransactionBuilder, Value,
+        Window, WindowBound, WindowFrame, WindowFrameUnit,
     };
     // The derive and attribute macros (`Model`, `relations`).
     pub use tork_orm_macros::*;
