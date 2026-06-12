@@ -95,6 +95,11 @@ pub fn is_timestamp_type(ty: &Type) -> bool {
     is_ident(ty, "OffsetDateTime") || is_ident(ty, "DateTimeUtc")
 }
 
+/// Returns `true` if `ty` is a supported integer type.
+pub fn is_integer_type(ty: &Type) -> bool {
+    ["i32", "i64", "u32", "u64"].iter().any(|name| is_ident(ty, name))
+}
+
 /// Classifies a field's (option-unwrapped) type for dialect validation.
 pub fn field_kind(ty: &Type) -> FieldKind {
     if is_json(ty) {

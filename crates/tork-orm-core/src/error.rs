@@ -24,6 +24,8 @@ pub enum ErrorKind {
     MultipleFound,
     /// The configuration or database URL was invalid.
     Configuration,
+    /// A concurrent modification was detected (optimistic-lock version mismatch).
+    Conflict,
 }
 
 impl ErrorKind {
@@ -36,6 +38,7 @@ impl ErrorKind {
             ErrorKind::NotFound => "not_found",
             ErrorKind::MultipleFound => "multiple_found",
             ErrorKind::Configuration => "configuration",
+            ErrorKind::Conflict => "conflict",
         }
     }
 }
@@ -109,6 +112,11 @@ impl OrmError {
     /// Builds a [`ErrorKind::MultipleFound`] error.
     pub fn multiple_found(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::MultipleFound, message)
+    }
+
+    /// Builds a [`ErrorKind::Conflict`] error (optimistic-lock mismatch).
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self::new(ErrorKind::Conflict, message)
     }
 
     /// Builds a [`ErrorKind::Configuration`] error.

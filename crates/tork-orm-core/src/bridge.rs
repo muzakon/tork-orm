@@ -17,6 +17,7 @@ impl From<OrmError> for Error {
         let kind = match error.kind() {
             ErrorKind::Connection => HttpKind::ServiceUnavailable,
             ErrorKind::NotFound => HttpKind::NotFound,
+            ErrorKind::Conflict => HttpKind::Conflict,
             ErrorKind::MultipleFound
             | ErrorKind::Query
             | ErrorKind::Conversion

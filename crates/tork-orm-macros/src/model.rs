@@ -18,7 +18,8 @@ use syn::{
 };
 
 use crate::common::{
-    field_kind, is_timestamp_type, krate, option_inner, sql_type_for, to_snake, FieldKind,
+    field_kind, is_integer_type, is_timestamp_type, krate, option_inner, sql_type_for, to_snake,
+    FieldKind,
 };
 
 /// Container options parsed from `#[table(...)]`.
@@ -377,6 +378,12 @@ struct FieldArgs {
     /// The field's type implements [`DbEnum`]; take its column type (a native
     /// `ENUM`/text + `CHECK`) from the type rather than mapping structurally.
     db_enum: bool,
+    /// Timestamp set by the database default on insert (`created_at` semantics).
+    created_at: bool,
+    /// Timestamp set on insert and auto-touched on every `save` (`updated_at`).
+    updated_at: bool,
+    /// The optimistic-lock version column.
+    version: bool,
 }
 
 impl Parse for FieldArgs {
@@ -390,6 +397,17 @@ impl Parse for FieldArgs {
                 "auto" => args.auto = true,
                 "unique" => args.unique = true,
                 "db_enum" => args.db_enum = true,
+                // created_at/updated_at imply a database default of the current
+                // timestamp on insert (reusing the `default_now` machinery).
+                "created_at" => {
+                    args.created_at = true;
+                    args.default = Some(FieldDefault::Now);
+                }
+                "updated_at" => {
+                    args.updated_at = true;
+                    args.default = Some(FieldDefault::Now);
+                }
+                "version" => args.version = true,
                 "index" => {
                     // Bare `index` enables a single-column index; `index = false`
                     // (or `= true`) toggles a foreign key's automatic index.
@@ -508,6 +526,10 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // Statements that fill client-side `default_with` fields when they are unset.
     let mut client_default_stmts: Vec<TokenStream2> = Vec::new();
     let mut primary_key: Option<(Ident, String)> = None;
+    // Lifecycle columns: the auto-touched `updated_at` and the optimistic-lock
+    // `version` (with its field for the in-memory accessors).
+    let mut updated_at_column: Option<String> = None;
+    let mut version_field: Option<(Ident, String)> = None;
     // Indexes built from the field-level attributes (`unique`/`index`) plus the
     // automatic index on each foreign key.
     let mut index_defs: Vec<TokenStream2> = Vec::new();
@@ -552,6 +574,28 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
 
         let nullable = option_inner(field_ty).is_some();
         let base_ty = option_inner(field_ty).unwrap_or(field_ty);
+
+        // Record the lifecycle columns. `updated_at` is auto-touched on save; the
+        // `created_at`/`updated_at` timestamp type is validated by the shared
+        // `default_now` path below. `version` must be an integer.
+        if args.updated_at {
+            updated_at_column = Some(column_name.clone());
+        }
+        if args.version {
+            if !(is_integer_type(base_ty)) {
+                return Err(syn::Error::new_spanned(
+                    field_ty,
+                    "`version` requires an integer field (i32/i64/u32/u64)",
+                ));
+            }
+            if version_field.is_some() {
+                return Err(syn::Error::new_spanned(
+                    field_ty,
+                    "a model may declare only one `version` column",
+                ));
+            }
+            version_field = Some((field_ident.clone(), column_name.clone()));
+        }
 
         // Reject a PostgreSQL-only column type when the project declares a dialect that
         // cannot support it (a no-op when no dialect is declared).
@@ -764,6 +808,31 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         }
     };
 
+    // Lifecycle metadata: the auto-touched `updated_at` column and the
+    // optimistic-lock `version` column (with its in-memory accessors).
+    let updated_at_const = match &updated_at_column {
+        Some(column) => quote! {
+            const UPDATED_AT: ::core::option::Option<&'static str> =
+                ::core::option::Option::Some(#column);
+        },
+        None => quote!(),
+    };
+    let version_items = match &version_field {
+        Some((field, column)) => quote! {
+            const VERSION: ::core::option::Option<&'static str> =
+                ::core::option::Option::Some(#column);
+
+            fn version_value(&self) -> ::core::option::Option<#krate::Value> {
+                ::core::option::Option::Some(#krate::BindValue::to_value(&self.#field))
+            }
+
+            fn bump_version(&mut self) {
+                self.#field += 1;
+            }
+        },
+        None => quote!(),
+    };
+
     // Generate an empty `ModelHooks` impl (all no-ops) unless `#[table(hooks)]` was
     // set, in which case the user provides their own.
     let hooks_impl = if table_args.hooks {
@@ -791,6 +860,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 #(#column_defs),*
             ];
             const PRIMARY_KEY: &'static str = #pk_column;
+            #updated_at_const
+            #version_items
 
             fn insert_values(&self) -> ::std::vec::Vec<(&'static str, #krate::Value)> {
                 ::std::vec![

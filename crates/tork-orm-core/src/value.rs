@@ -259,11 +259,29 @@ impl FromValue for OffsetDateTime {
     fn from_value(value: Value) -> crate::Result<Self> {
         match value {
             Value::Timestamp(ts) => Ok(ts),
-            Value::Text(s) => OffsetDateTime::parse(&s, &time::format_description::well_known::Rfc3339)
-                .map_err(|_| crate::OrmError::conversion("invalid RFC 3339 timestamp")),
+            Value::Text(s) => parse_timestamp_text(&s),
             other => Err(mismatch("OffsetDateTime", &other)),
         }
     }
+}
+
+/// Parses a timestamp from text, accepting RFC 3339 first and then SQLite's
+/// `CURRENT_TIMESTAMP` form (`YYYY-MM-DD HH:MM:SS`, UTC, no offset), which is what
+/// a database-side default writes into a text-affinity column on SQLite.
+fn parse_timestamp_text(text: &str) -> crate::Result<OffsetDateTime> {
+    use time::format_description::well_known::Rfc3339;
+    if let Ok(ts) = OffsetDateTime::parse(text, &Rfc3339) {
+        return Ok(ts);
+    }
+    let sqlite_format = time::macros::format_description!(
+        "[year]-[month]-[day] [hour]:[minute]:[second]"
+    );
+    if let Ok(naive) = time::PrimitiveDateTime::parse(text, &sqlite_format) {
+        return Ok(naive.assume_utc());
+    }
+    Err(crate::OrmError::conversion(format!(
+        "invalid timestamp text `{text}` (expected RFC 3339 or `YYYY-MM-DD HH:MM:SS`)"
+    )))
 }
 
 impl FromValue for serde_json::Value {

@@ -572,3 +572,51 @@ async fn distinct_on_is_rejected_on_mysql() {
     let result = Item::query().distinct_on((Item::category,)).all(&db).await;
     assert!(result.is_err(), "DISTINCT ON should be rejected on MySQL");
 }
+
+#[derive(Debug, Clone, Model, PartialEq)]
+#[table(name = "my_docs")]
+struct Doc {
+    #[field(primary_key, auto)]
+    id: i64,
+    #[field(varchar(length = 50))]
+    body: String,
+    #[field(updated_at)]
+    updated_at: OffsetDateTime,
+    #[field(version)]
+    version: i64,
+}
+
+#[tokio::test]
+async fn lifecycle_version_conflict_and_timestamp() {
+    let db = connect().await;
+    reset(
+        &db,
+        "DROP TABLE IF EXISTS my_docs",
+        "CREATE TABLE my_docs (\
+            id BIGINT AUTO_INCREMENT PRIMARY KEY, \
+            body VARCHAR(50) NOT NULL, \
+            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, \
+            version BIGINT NOT NULL)",
+    )
+    .await;
+
+    let created = Doc::create(
+        &db,
+        &Doc { id: 0, body: "v1".into(), updated_at: OffsetDateTime::UNIX_EPOCH, version: 1 },
+    )
+    .await
+    .unwrap();
+    assert_eq!(created.version, 1);
+    assert!(created.updated_at.year() >= 2026);
+
+    let mut a = Doc::find(&db, created.id).await.unwrap();
+    let mut b = Doc::find(&db, created.id).await.unwrap();
+
+    a.body = "from-a".into();
+    a.save(&db).await.unwrap();
+    assert_eq!(a.version, 2);
+
+    b.body = "from-b".into();
+    assert_eq!(b.save(&db).await.unwrap_err().kind(), ErrorKind::Conflict);
+    assert_eq!(Doc::find(&db, created.id).await.unwrap().body, "from-a");
+}
