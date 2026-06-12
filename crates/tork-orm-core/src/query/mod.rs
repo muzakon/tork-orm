@@ -7,6 +7,8 @@ pub mod expr;
 pub mod func;
 pub mod projection;
 pub mod queryset;
+pub mod union;
 pub mod write;
 
 pub use queryset::QuerySet;
+pub use union::UnionQuery;

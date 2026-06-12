@@ -290,6 +290,34 @@ impl<M: Model> QuerySet<M> {
         crate::query::expr::Expr::subquery(self.statement)
     }
 
+    /// Combines this query with `other` as `UNION` (removes duplicates).
+    ///
+    /// Returns a [`UnionQuery`](crate::query::UnionQuery) that can be extended
+    /// with further branches and supports the same terminals (`all`, `first`,
+    /// `count`) as `QuerySet`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use tork_orm_core::{Database, Model, Value};
+    /// # struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } }
+    /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
+    /// let rows = User::query()
+    ///     .filter(User::query().into_statement().filters.is_empty().then_some(tork_orm_core::Expr::CountStar).unwrap_or(tork_orm_core::Expr::CountStar))
+    ///     .union(User::query())
+    ///     .all(&db).await?;
+    /// # let _ = rows; Ok(())
+    /// # }
+    /// ```
+    pub fn union(self, other: QuerySet<M>) -> crate::query::union::UnionQuery<M> {
+        crate::query::union::UnionQuery::new(self, other, false)
+    }
+
+    /// Combines this query with `other` as `UNION ALL` (preserves duplicates).
+    pub fn union_all(self, other: QuerySet<M>) -> crate::query::union::UnionQuery<M> {
+        crate::query::union::UnionQuery::new(self, other, true)
+    }
+
     /// Runs the query and returns every matching row as `M`.
     pub async fn all(self, executor: impl Executor) -> crate::Result<Vec<M>> {
         self.all_as::<M>(executor).await

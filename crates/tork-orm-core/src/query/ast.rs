@@ -130,6 +130,27 @@ pub struct SelectStatement {
     pub distinct: bool,
 }
 
+/// A `UNION` or `UNION ALL` combining two or more `SELECT` statements.
+///
+/// Built by [`QuerySet::union`](crate::query::QuerySet::union) and
+/// [`QuerySet::union_all`](crate::query::QuerySet::union_all). The
+/// `order_by`, `limit`, and `offset` fields apply to the whole combined
+/// result, not to any individual branch.
+#[derive(Debug, Clone)]
+pub struct UnionStatement {
+    /// The first `SELECT`.
+    pub first: SelectStatement,
+    /// Subsequent branches; the `bool` flag is `true` for `UNION ALL`,
+    /// `false` for `UNION` (distinct).
+    pub rest: Vec<(bool, SelectStatement)>,
+    /// `ORDER BY` terms applied after all branches are combined.
+    pub order_by: Vec<OrderItem>,
+    /// Optional row limit applied to the combined result.
+    pub limit: Option<u64>,
+    /// Optional row offset applied to the combined result.
+    pub offset: Option<u64>,
+}
+
 impl SelectStatement {
     /// Builds a statement selecting the given columns from `table`.
     pub fn new(table: &'static str, projection: Vec<SelectItem>) -> Self {

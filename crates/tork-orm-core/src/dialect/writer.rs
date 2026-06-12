@@ -6,7 +6,7 @@
 //! share one rendering walk and differ only in their primitives.
 
 use crate::dialect::Dialect;
-use crate::query::ast::{JoinKind, SelectItem, SelectStatement};
+use crate::query::ast::{JoinKind, SelectItem, SelectStatement, UnionStatement};
 use crate::query::expr::Expr;
 use crate::query::write::{DeleteStatement, InsertStatement, UpdateStatement};
 use crate::value::Value;
@@ -339,6 +339,39 @@ impl<'a> QueryWriter<'a> {
         }
     }
 
+    /// Renders a `UNION` / `UNION ALL` of several `SELECT` statements.
+    ///
+    /// `ORDER BY`, `LIMIT`, and `OFFSET` appear once at the end and apply to
+    /// the whole combined result.
+    pub fn write_union(&mut self, statement: &UnionStatement) {
+        self.write_select(&statement.first);
+        for (is_all, stmt) in &statement.rest {
+            self.push_sql(if *is_all { " UNION ALL " } else { " UNION " });
+            self.write_select(stmt);
+        }
+        if !statement.order_by.is_empty() {
+            self.push_sql(" ORDER BY ");
+            for (index, term) in statement.order_by.iter().enumerate() {
+                if index != 0 {
+                    self.push_sql(", ");
+                }
+                self.write_expr(&term.expr);
+                self.push_sql(if term.descending { " DESC" } else { " ASC" });
+                if let Some(nulls_first) = term.nulls {
+                    self.push_sql(if nulls_first { " NULLS FIRST" } else { " NULLS LAST" });
+                }
+            }
+        }
+        if let Some(limit) = statement.limit {
+            self.push_sql(" LIMIT ");
+            self.push_sql(&limit.to_string());
+        }
+        if let Some(offset) = statement.offset {
+            self.push_sql(" OFFSET ");
+            self.push_sql(&offset.to_string());
+        }
+    }
+
     /// Renders a `SELECT COUNT(*)` over a statement's table and filters.
     pub fn write_count(&mut self, statement: &SelectStatement) {
         self.push_sql("SELECT COUNT(*) FROM ");
@@ -417,6 +450,13 @@ impl<'a> QueryWriter<'a> {
     pub fn finish(self) -> (String, Vec<Value>) {
         (self.sql, self.params)
     }
+}
+
+/// Renders a `UNION` statement to SQL and bound parameters.
+pub fn render_union(dialect: &dyn Dialect, statement: &UnionStatement) -> (String, Vec<Value>) {
+    let mut writer = QueryWriter::new(dialect);
+    writer.write_union(statement);
+    writer.finish()
 }
 
 /// Renders a `SELECT` statement to SQL and bound parameters.

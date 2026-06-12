@@ -16,7 +16,7 @@ pub use sqlite::SqliteDialect;
 
 pub use writer::{
     QueryWriter, predicate_sql, quote_string_literal, render_count, render_delete, render_exists,
-    render_expr, render_insert, render_select, render_update,
+    render_expr, render_insert, render_select, render_union, render_update,
 };
 
 /// Identifies a database backend.
