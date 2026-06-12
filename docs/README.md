@@ -17,12 +17,16 @@ This guide walks you through the ORM from the ground up. Each chapter is filled 
 9. [Tork Framework Integration](09-framework-integration.md)
 10. [Database Transactions](10-transactions.md)
 11. [Scalar Functions](11-functions.md)
+12. [Database Backends and Dialects](12-database-backends.md)
 
 ## Key Features
 
 - **Type-safe Querying:** Database columns are mapped to typed handles. Comparing columns to mismatched types is caught at compile time.
 - **Tortoise-inspired API:** Ergonomic query chaining (`filter`, `order_by`, `limit`, etc.) with async executors.
+- **Multi-backend:** One model runs against SQLite, PostgreSQL, and MySQL, with dialect-specific SQL and optional build-time gating.
 - **N+1 Safe Eager Loading:** Preload related models onto their parents in bulk, with exactly one additional query per relationship.
+- **Lifecycle Columns:** Built-in `created_at`/`updated_at` timestamps, optimistic-lock `version`, and `deleted_at` soft-delete with an automatic query scope.
+- **Database Enums:** Derive `DbEnum` for text-backed enums, rendered as native `ENUM` on MySQL and `CHECK`-constrained columns elsewhere.
 - **A-to-Z Indexing:** Rich support for single-column, unique, compound, descending, partial, functional, and operator-class indexes.
 - **Declarative Migrations:** Write migrations programmatically using a DDL builder, or generate SQL files via automated schema diffing.
 - **Zero-compilation CLI:** Scaffolds and runs SQL-based migrations with simple database state tracking.

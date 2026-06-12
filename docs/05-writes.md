@@ -225,3 +225,53 @@ let user = User::first_or_create(
     &User { id: 0, username: "default".into(), email: "default@x.com".into(), is_active: true },
 ).await?;
 ```
+
+## 7. Automatic Timestamps
+
+A `#[field(created_at)]` column is filled by the database default when a row is inserted, and a `#[field(updated_at)]` column is additionally refreshed to the current database time on every `save()`. (See [Defining Models](02-models.md) for the field declarations; both expect a `DEFAULT CURRENT_TIMESTAMP` in the migration.)
+
+```rust
+let mut doc = Document::find(&db, 1).await?;
+doc.body = "edited".into();
+doc.save(&db).await?;   // updated_at becomes the database NOW(); created_at is untouched
+```
+
+`create()` returns the stored row with both timestamps populated by the database.
+
+## 8. Optimistic Locking
+
+A `#[field(version)]` column guards against lost updates from concurrent writers. Each `save()` only updates the row when its version still matches the one you loaded, increments the version in the same statement, and bumps the in-memory value:
+
+```rust
+let mut a = Document::find(&db, 1).await?;   // version 4
+let mut b = Document::find(&db, 1).await?;   // version 4
+
+a.body = "from a".into();
+a.save(&db).await?;                          // ok; the row and `a` are now version 5
+
+b.body = "from b".into();
+let result = b.save(&db).await;              // `b` is stale (still version 4)
+assert_eq!(result.unwrap_err().kind(), ErrorKind::Conflict);
+```
+
+A conflict returns an `ErrorKind::Conflict` error (mapped to HTTP 409 when bridged into the Tork framework). Reload the row and retry.
+
+## 9. Soft Delete
+
+When a model has a `#[field(deleted_at)]` column, `delete()` becomes a *soft* delete: it stamps `deleted_at` with the current time instead of removing the row. Default queries then hide it (see [Querying](04-queries.md), Soft-Delete Query Scope).
+
+```rust
+let note = Note::find(&db, 1).await?;
+note.delete(&db).await?;        // soft: sets deleted_at, the row stays in the table
+
+note.restore(&db).await?;       // clears deleted_at
+note.force_delete(&db).await?;  // permanent removal, bypassing soft-delete
+```
+
+The same operations exist on a `QuerySet` for bulk use:
+
+```rust
+Note::query().filter(Note::stale.eq(true)).delete(&db).await?;   // soft-delete many
+Note::query().only_deleted().restore(&db).await?;               // restore all trashed
+Note::query().with_deleted().hard_delete(&db).await?;           // purge everything
+```

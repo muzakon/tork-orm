@@ -104,6 +104,81 @@ pub struct Article {
 }
 ```
 
+### Database Enums (`#[derive(DbEnum)]`)
+
+Implementing `BindValue`/`FromValue` by hand (above) works, but for the common case of an enum stored as text you can derive `DbEnum` instead. It generates the conversions, records the allowed values, and gives the column a real database enum type.
+
+```rust
+use tork_orm::prelude::*;
+
+#[derive(Debug, Clone, Copy, PartialEq, DbEnum)]
+pub enum Status {
+    Active,                       // stored as 'active'
+    Inactive,                     // stored as 'inactive'
+    #[db_enum(rename = "on_hold")]
+    OnHold,                       // stored as 'on_hold'
+}
+```
+
+By default each variant is stored as its `snake_case` name. Override one variant with `#[db_enum(rename = "...")]`, or the whole enum with `#[db_enum(rename_all = "...")]` (`snake_case`, `SCREAMING_SNAKE_CASE`, `kebab-case`, `lowercase`, `UPPERCASE`, `PascalCase`, `camelCase`). Set the type name with `#[db_enum(name = "...")]` (it defaults to the `snake_case` of the enum).
+
+Mark the model field with `#[field(db_enum)]` to use it:
+
+```rust
+#[derive(Debug, Clone, Model)]
+#[table(name = "accounts")]
+pub struct Account {
+    #[field(primary_key, auto)]
+    pub id: i64,
+    #[field(db_enum)]
+    pub status: Status,
+    #[field(db_enum)]
+    pub tier: Option<Status>,   // nullable
+}
+```
+
+Enums work on every backend. The column renders as a native `ENUM('active', 'inactive', 'on_hold')` on MySQL and as a text column with a `CHECK (status IN ('active', 'inactive', 'on_hold'))` constraint on PostgreSQL and SQLite, so an out-of-range value is rejected by the database everywhere. Filtering uses the enum value directly:
+
+```rust
+let active = Account::query()
+    .filter(Account::status.eq(Status::Active))
+    .all(&db)
+    .await?;
+```
+
+## Lifecycle Columns
+
+Four field attributes turn a column into a managed lifecycle column. They are ordinary columns you can still read and write; the ORM maintains them for you.
+
+| Attribute | Field type | Behavior |
+| --- | --- | --- |
+| `#[field(created_at)]` | `OffsetDateTime` | Set to the database time on insert; never changed afterwards. |
+| `#[field(updated_at)]` | `OffsetDateTime` | Set on insert and refreshed to the database time on every `save()`. |
+| `#[field(version)]` | integer (`i32`/`i64`) | Optimistic-lock counter, checked and incremented by `save()`. |
+| `#[field(deleted_at)]` | `Option<OffsetDateTime>` | Soft-delete marker; `delete()` stamps it instead of removing the row. |
+
+```rust
+use time::OffsetDateTime;
+
+#[derive(Debug, Clone, Model)]
+#[table(name = "documents")]
+pub struct Document {
+    #[field(primary_key, auto)]
+    pub id: i64,
+    pub body: String,
+    #[field(created_at)]
+    pub created_at: OffsetDateTime,
+    #[field(updated_at)]
+    pub updated_at: OffsetDateTime,
+    #[field(version)]
+    pub version: i64,
+    #[field(deleted_at)]
+    pub deleted_at: Option<OffsetDateTime>,
+}
+```
+
+The `created_at` and `updated_at` columns rely on a database default, so declare them `DEFAULT CURRENT_TIMESTAMP` in your migration. The write-time behavior is covered in [Writes](05-writes.md); the soft-delete query scope is covered in [Querying](04-queries.md).
+
 ## The Model Trait API
 
 Deriving `Model` generates several helpful metadata constants and methods that can be accessed programmatically:

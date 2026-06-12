@@ -884,9 +884,9 @@ let empty = User::query().none().all(&db).await?;
 assert!(empty.is_empty());
 ```
 
-## 24. `for_update()` — Row-Level Locking
+## 24. Row-Level Locking (`for_update`, `for_share`, ...)
 
-`.for_update()` appends `FOR UPDATE` to the `SELECT` statement, locking matched rows against concurrent modification. Must be used inside a transaction.
+`.for_update()` appends `FOR UPDATE` to the `SELECT`, locking matched rows against concurrent modification until the transaction commits. Must be used inside a transaction.
 
 ```rust
 let user = User::query()
@@ -896,7 +896,25 @@ let user = User::query()
     .await?;
 ```
 
-**Note:** The SQLite version bundled with this crate does not support `FOR UPDATE` (requires SQLite 3.54+). This feature is intended for PostgreSQL/MySQL backends and future SQLite versions. It is safe to call on any backend — the SQL is rendered, but execution will fail if the backend does not support it.
+`.for_share()` takes a weaker shared lock (`FOR SHARE`) that still allows concurrent reads. Three modifiers refine the wait behavior, and each implies `FOR UPDATE` when used on its own:
+
+- `.skip_locked()` skips rows already locked by another transaction (`SKIP LOCKED`), the classic job-queue pattern.
+- `.nowait()` fails immediately instead of waiting (`NOWAIT`).
+- `.lock_of(&[Table::TABLE])` restricts the lock to specific tables (`OF ...`).
+
+```rust
+// Claim the next available job without blocking on locked rows.
+let jobs = Job::query()
+    .filter(Job::state.eq(JobState::Pending))
+    .order_by(Job::id.asc())
+    .limit(1)
+    .for_update()
+    .skip_locked()
+    .all(&db)
+    .await?;
+```
+
+A bare `FOR UPDATE` runs on every backend with row locking (PostgreSQL, MySQL, SQLite 3.54+). The modifiers (`for_share`, `skip_locked`, `nowait`, `lock_of`) require PostgreSQL or MySQL; using them on SQLite returns a clear error at execution time.
 
 ## 25. `chunk(size)` — Batch Processing
 
@@ -916,4 +934,67 @@ for batch in batches {
 }
 ```
 
-**Eager loading:** all batches are fetched before the method returns — there is no server-side cursor. Each batch runs a separate `SELECT` with `LIMIT size OFFSET n` against the same query.
+**Eager loading:** all batches are fetched before the method returns; there is no server-side cursor. Each batch runs a separate `SELECT` with `LIMIT size OFFSET n` against the same query.
+
+## 26. `distinct_on(...)` — Distinct On (PostgreSQL)
+
+`.distinct_on((cols...))` keeps only the first row of each group of the given expressions, ordered by the query's `ORDER BY`. It is the idiomatic way to fetch "the top row per group".
+
+```rust
+// The cheapest product in each category.
+let cheapest = Product::query()
+    .distinct_on((Product::category,))
+    .order_by(Product::category.asc())
+    .order_by(Product::price.asc())
+    .all(&db)
+    .await?;
+```
+
+`DISTINCT ON` is a PostgreSQL feature. On SQLite or MySQL the query is rejected with a clear error at execution time.
+
+## 27. Keyset (Seek) Pagination
+
+Offset pagination (Section 22) grows slower as the offset increases, because the database still scans and discards the skipped rows. Keyset pagination instead remembers the last row seen and seeks past it, staying fast at any depth.
+
+Pass the ordering-key values of the last row of the previous page to `.keyset_after(cursor)`. The cursor holds one `Value` per `ORDER BY` term, in the same order; build them with `BindValue::to_value`.
+
+```rust
+// First page.
+let page1 = Article::query()
+    .order_by(Article::published_at.desc())
+    .order_by(Article::id.desc())
+    .limit(20)
+    .all(&db)
+    .await?;
+
+// Next page: seek past the last row of page 1.
+if let Some(last) = page1.last() {
+    let cursor = vec![last.published_at.to_value(), last.id.to_value()];
+    let page2 = Article::query()
+        .order_by(Article::published_at.desc())
+        .order_by(Article::id.desc())
+        .keyset_after(cursor)
+        .limit(20)
+        .all(&db)
+        .await?;
+}
+```
+
+`.keyset_after` produces a lexicographic comparison such as `(published_at < ?) OR (published_at = ? AND id < ?)`, honoring each term's `ASC`/`DESC` direction. `.keyset_before(cursor)` walks backwards. Include a final unique column (such as the primary key) in the ordering so the cursor is unambiguous.
+
+## 28. Soft-Delete Query Scope
+
+When a model declares a `#[field(deleted_at)]` column (see [Defining Models](02-models.md)), every query is scoped to non-deleted rows by default: the ORM adds `WHERE deleted_at IS NULL` automatically, including inside subqueries and unions.
+
+```rust
+// Only live rows (default).
+let live = Note::query().all(&db).await?;
+
+// Include soft-deleted rows.
+let everything = Note::query().with_deleted().all(&db).await?;
+
+// Only the soft-deleted rows.
+let trashed = Note::query().only_deleted().all(&db).await?;
+```
+
+`find` and `get_or_none` respect the default scope too, so a soft-deleted row is reported as not found unless you opt in with `with_deleted()`. The delete and restore operations are covered in [Writes](05-writes.md).
