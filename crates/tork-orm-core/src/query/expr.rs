@@ -209,6 +209,17 @@ pub enum Expr {
         /// Whether the test is negated (`NOT IN`).
         negated: bool,
     },
+    /// A verbatim SQL fragment with pre-bound parameters.
+    ///
+    /// Use [`QuerySet::filter_raw`](crate::QuerySet) for WHERE predicates that
+    /// the builder cannot express. Use [`Expr::raw`] for column-free constant
+    /// fragments (`CURRENT_TIMESTAMP`, `RANDOM()`, etc.) that take no parameters.
+    Raw {
+        /// The raw SQL text, emitted verbatim. Write `?` for each bound value.
+        sql: String,
+        /// Bound parameters, matched positionally to each `?` placeholder.
+        params: Vec<Value>,
+    },
 }
 
 /// Builder for a `CASE WHEN` expression.
@@ -375,6 +386,18 @@ impl Expr {
             subquery: Box::new(stmt),
             negated,
         }
+    }
+
+    /// Embeds a verbatim SQL fragment with no bound parameters.
+    ///
+    /// Reserved for column-free constants and database built-ins that have no
+    /// typed builder equivalent (`CURRENT_TIMESTAMP`, `RANDOM()`, etc.). The
+    /// string is emitted exactly as written — no quoting, no parameter binding.
+    ///
+    /// For parameterized raw WHERE predicates use
+    /// [`QuerySet::filter_raw`](crate::QuerySet) instead.
+    pub fn raw(sql: impl Into<String>) -> Self {
+        Expr::Raw { sql: sql.into(), params: Vec::new() }
     }
 
     /// Aliases this expression, `expr AS "alias"`.

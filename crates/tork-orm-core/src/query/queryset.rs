@@ -66,6 +66,39 @@ impl<M: Model> QuerySet<M> {
         self
     }
 
+    /// Adds a raw SQL predicate joined with `AND`.
+    ///
+    /// Write `?` for each bound value; params are passed as any `BindValue`
+    /// (plain Rust values — no `Value::` wrapping required).
+    ///
+    /// For SQL without `?` placeholders, pass an empty params iterator or use
+    /// [`Expr::raw`] as a filter value directly.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use tork_orm_core::{Database, Model, Value};
+    /// # struct User;
+    /// # impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } }
+    /// # impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } }
+    /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
+    /// let users = User::query()
+    ///     .filter_raw("LENGTH(username) > ?", [5_i64])
+    ///     .all(&db)
+    ///     .await?;
+    /// # let _ = users; Ok(())
+    /// # }
+    /// ```
+    pub fn filter_raw<V, I>(mut self, sql: impl Into<String>, params: I) -> Self
+    where
+        V: crate::value::BindValue,
+        I: IntoIterator<Item = V>,
+    {
+        let raw_params = params.into_iter().map(|v| v.to_value()).collect();
+        self.statement.filters.push(Expr::Raw { sql: sql.into(), params: raw_params });
+        self
+    }
+
     /// Adds an `AND (a OR b OR ...)` group from several predicates.
     pub fn filter_any(mut self, predicates: impl IntoIterator<Item = Expr>) -> Self {
         self.statement.filters.push(Expr::any(predicates));

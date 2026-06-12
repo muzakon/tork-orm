@@ -181,6 +181,14 @@ impl<'a> QueryWriter<'a> {
                 self.write_select(subquery);
                 self.sql.push(')');
             }
+            Expr::Raw { sql, params } => {
+                // The raw SQL already contains its own `?` placeholders; just
+                // record the bound values without emitting additional markers.
+                self.push_sql(sql);
+                for p in params {
+                    self.params.push(p.clone());
+                }
+            }
         }
     }
 

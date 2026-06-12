@@ -330,6 +330,37 @@ async fn not_in_empty_list_matches_all_rows() {
     assert_eq!(users, 4);
 }
 
+// ── RAW SQL ───────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn filter_raw_returns_matching_rows() {
+    let db = seed().await;
+    // Seeded: alice (1), bob (2), carol (3), dave (4).
+    // SQLite LENGTH() on username — should return users whose username is longer than 4 chars.
+    // "alice" = 5, "carol" = 5, "dave" = 4, "bob" = 3.
+    let users = User::query()
+        .filter_raw("LENGTH(username) > ?", [4_i64])
+        .order_by(User::id.asc())
+        .all(&db)
+        .await
+        .unwrap();
+    assert_eq!(users.len(), 2);
+    assert_eq!(users[0].username, "alice");
+    assert_eq!(users[1].username, "carol");
+}
+
+#[tokio::test]
+async fn filter_raw_no_params_works() {
+    let db = seed().await;
+    // Constant predicate that is always true (1 = 1) — all rows returned.
+    let users = User::query()
+        .filter_raw("1 = 1", [] as [i64; 0])
+        .count(&db)
+        .await
+        .unwrap();
+    assert_eq!(users, 4);
+}
+
 // ── SUBQUERIES ────────────────────────────────────────────────────────────────
 
 #[tokio::test]

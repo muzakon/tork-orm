@@ -360,6 +360,35 @@ fn icontains_uses_ilike() {
     assert_eq!(params, vec![Value::Text("%ALICE%".into())]);
 }
 
+// ── RAW EXPRESSIONS ───────────────────────────────────────────────────────────
+
+#[test]
+fn raw_expr_renders_verbatim() {
+    let (sql, params) = render(&Expr::raw("CURRENT_TIMESTAMP"));
+    assert_eq!(sql, "CURRENT_TIMESTAMP");
+    assert!(params.is_empty());
+}
+
+#[test]
+fn raw_expr_with_params_binds_in_order() {
+    let expr = Expr::Raw {
+        sql: "a > ? AND b < ?".into(),
+        params: vec![Value::Int(1), Value::Int(10)],
+    };
+    let (sql, params) = render(&expr);
+    assert_eq!(sql, "a > ? AND b < ?");
+    assert_eq!(params, vec![Value::Int(1), Value::Int(10)]);
+}
+
+#[test]
+fn raw_expr_in_binary_comparison() {
+    // Expr::raw as the RHS of a binary — e.g. id > (some raw constant)
+    let expr = Expr::binary(User::id.expr(), tork_orm::BinaryOp::Gt, Expr::raw("0"));
+    let (sql, params) = render(&expr);
+    assert_eq!(sql, "\"users\".\"id\" > 0");
+    assert!(params.is_empty());
+}
+
 // ── SUBQUERIES ────────────────────────────────────────────────────────────────
 
 #[test]
