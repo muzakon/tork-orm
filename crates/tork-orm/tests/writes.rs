@@ -25,7 +25,7 @@ struct Counter {
 async fn empty_db() -> Database {
     let db = Database::connect(":memory:", 1).await.unwrap();
     db.execute(
-        "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL, email TEXT NOT NULL, is_active INTEGER NOT NULL)"
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE, email TEXT NOT NULL, is_active INTEGER NOT NULL)"
             .into(),
         vec![],
     )
@@ -225,4 +225,100 @@ async fn update_set_with_literal_still_binds_param() {
 
     let reloaded = Counter::query().filter(Counter::id.eq(c.id)).one(&db).await.unwrap();
     assert_eq!(reloaded.hits, 42);
+}
+
+// ── upsert ────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn upsert_inserts_when_no_conflict() {
+    let db = empty_db().await;
+    // alice does not exist; upsert should insert and return the new row.
+    let stored = User::upsert(&db, &new_user("alice")).await.unwrap();
+    assert_eq!(stored.username, "alice");
+    assert!(stored.id > 0);
+    assert_eq!(User::query().count(&db).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn upsert_replaces_conflicting_row_on_unique_key() {
+    let db = empty_db().await;
+    // Insert alice first (auto-id assigned).
+    let _ = User::create(&db, &new_user("alice")).await.unwrap();
+
+    // Upsert the same username (UNIQUE constraint) with a different email.
+    // INSERT OR REPLACE deletes the conflicting row and inserts the new one.
+    let replaced = User::upsert(
+        &db,
+        &User { id: 0, username: "alice".into(), email: "alice2@example.com".into(), is_active: false },
+    )
+    .await
+    .unwrap();
+    assert_eq!(replaced.username, "alice");
+    assert_eq!(replaced.email, "alice2@example.com");
+    assert!(!replaced.is_active);
+
+    // Still exactly one alice row in the table.
+    assert_eq!(User::query().count(&db).await.unwrap(), 1);
+}
+
+// ── update_returning ──────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn update_returning_gives_back_changed_rows() {
+    let db = empty_db().await;
+    User::bulk_create(&db, &[new_user("alice"), new_user("bob")]).await.unwrap();
+
+    let updated = User::query()
+        .filter(User::username.eq("alice"))
+        .update_returning(&db, [User::is_active.set(false)])
+        .await
+        .unwrap();
+
+    assert_eq!(updated.len(), 1);
+    assert_eq!(updated[0].username, "alice");
+    assert!(!updated[0].is_active);
+}
+
+#[tokio::test]
+async fn update_returning_empty_when_no_rows_match() {
+    let db = empty_db().await;
+    let updated = User::query()
+        .filter(User::username.eq("nobody"))
+        .update_returning(&db, [User::is_active.set(false)])
+        .await
+        .unwrap();
+    assert!(updated.is_empty());
+}
+
+// ── delete_returning ──────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn delete_returning_gives_back_removed_rows() {
+    let db = empty_db().await;
+    User::bulk_create(&db, &[new_user("alice"), new_user("bob"), new_user("carol")])
+        .await
+        .unwrap();
+
+    let removed = User::query()
+        .filter(User::username.eq("bob"))
+        .delete_returning(&db)
+        .await
+        .unwrap();
+
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].username, "bob");
+    assert_eq!(User::query().count(&db).await.unwrap(), 2);
+}
+
+#[tokio::test]
+async fn delete_returning_all_rows_clears_table() {
+    let db = empty_db().await;
+    User::bulk_create(&db, &[new_user("alice"), new_user("bob")]).await.unwrap();
+
+    let removed = User::query().delete_returning(&db).await.unwrap();
+    assert_eq!(removed.len(), 2);
+    let mut names: Vec<&str> = removed.iter().map(|u| u.username.as_str()).collect();
+    names.sort_unstable();
+    assert_eq!(names, ["alice", "bob"]);
+    assert_eq!(User::query().count(&db).await.unwrap(), 0);
 }

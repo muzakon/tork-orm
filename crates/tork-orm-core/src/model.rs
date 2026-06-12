@@ -12,7 +12,7 @@ use crate::executor::Executor;
 use crate::query::QuerySet;
 use crate::query::ast::{SelectItem, SelectStatement};
 use crate::query::expr::{BinaryOp, Expr};
-use crate::query::write::{Assignment, InsertStatement, UpdateStatement};
+use crate::query::write::{Assignment, InsertStatement, OnConflict, UpdateStatement};
 use crate::row::Row;
 use crate::value::Value;
 
@@ -169,6 +169,7 @@ pub trait Model: FromRow + Send + Sync + 'static {
                 columns,
                 rows: vec![row],
                 returning,
+                on_conflict: OnConflict::None,
             };
             let (sql, params) = render_insert(executor.dialect(), &statement);
 
@@ -234,9 +235,88 @@ pub trait Model: FromRow + Send + Sync + 'static {
                 columns,
                 rows,
                 returning: Vec::new(),
+                on_conflict: OnConflict::None,
             };
             let (sql, params) = render_insert(executor.dialect(), &statement);
             Ok(executor.execute(sql, params).await?.rows_affected)
+        }
+    }
+
+    /// Inserts `value`, replacing any existing row that conflicts on a unique key.
+    ///
+    /// Uses `INSERT OR REPLACE INTO` (SQLite) which deletes the conflicting row
+    /// and then inserts the new one. Returns the stored row including any columns
+    /// assigned by the database (such as a new auto-increment primary key, since
+    /// the old row was deleted first).
+    ///
+    /// For a "skip on conflict" strategy use [`Model::create`] with [`OnConflict::Ignore`]
+    /// directly on an [`InsertStatement`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use tork_orm_core::{Database, Model, Value};
+    /// # struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } }
+    /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
+    /// let updated = User::upsert(&db, &User { /* ... */ }).await?;
+    /// # let _ = updated; Ok(())
+    /// # }
+    /// ```
+    fn upsert<E: Executor + Send>(
+        executor: E,
+        value: &Self,
+    ) -> impl std::future::Future<Output = crate::Result<Self>> + Send
+    where
+        Self: Sized,
+    {
+        async move {
+            let pairs = value.insert_values();
+            let columns: Vec<&'static str> = pairs.iter().map(|(name, _)| *name).collect();
+            let row: Vec<Value> = pairs.into_iter().map(|(_, v)| v).collect();
+            let supports_returning = executor.dialect().supports_returning();
+            let returning: Vec<&'static str> = if supports_returning {
+                Self::COLUMNS.iter().map(|c| c.name).collect()
+            } else {
+                Vec::new()
+            };
+            let statement = InsertStatement {
+                table: Self::TABLE,
+                columns,
+                rows: vec![row],
+                returning,
+                on_conflict: OnConflict::Replace,
+            };
+            let (sql, params) = render_insert(executor.dialect(), &statement);
+
+            if supports_returning {
+                let rows = executor.fetch_all(sql, params).await?;
+                let row = rows.first().ok_or_else(|| {
+                    OrmError::query("upsert with RETURNING produced no row")
+                })?;
+                return Self::from_row(row);
+            }
+
+            let inserted = executor.execute(sql, params).await?;
+            let projection = Self::COLUMNS
+                .iter()
+                .map(|column| SelectItem::Column {
+                    table: Self::TABLE,
+                    column: column.name,
+                })
+                .collect();
+            let mut select = SelectStatement::new(Self::TABLE, projection);
+            select.filters.push(Expr::binary(
+                Expr::column(Self::TABLE, Self::PRIMARY_KEY),
+                BinaryOp::Eq,
+                Expr::value(Value::Int(inserted.last_insert_rowid)),
+            ));
+            select.limit = Some(1);
+            let (sql, params) = render_select(executor.dialect(), &select);
+            let rows = executor.fetch_all(sql, params).await?;
+            let row = rows
+                .first()
+                .ok_or_else(|| OrmError::query("upserted row could not be reloaded"))?;
+            Self::from_row(row)
         }
     }
 
@@ -263,6 +343,7 @@ pub trait Model: FromRow + Send + Sync + 'static {
                     BinaryOp::Eq,
                     Expr::value(self.primary_key_value()),
                 )],
+                returning: Vec::new(),
             };
             let (sql, params) = crate::dialect::render_update(executor.dialect(), &statement);
             Ok(executor.execute(sql, params).await?.rows_affected)

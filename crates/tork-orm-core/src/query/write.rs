@@ -7,6 +7,24 @@
 use crate::query::expr::Expr;
 use crate::value::Value;
 
+/// Controls what happens when an inserted row conflicts with an existing one.
+///
+/// Used in [`InsertStatement`] and produced by [`Model::upsert`](crate::Model::upsert).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OnConflict {
+    /// Standard `INSERT INTO` — propagate the conflict as an error (default).
+    #[default]
+    None,
+    /// `INSERT OR REPLACE INTO` — delete the conflicting row, then insert.
+    ///
+    /// The conflicting row is deleted before the new one is inserted, so
+    /// auto-increment primary keys are re-assigned. Triggers and foreign-key
+    /// cascade rules on the deleted row fire as usual.
+    Replace,
+    /// `INSERT OR IGNORE INTO` — silently skip on conflict.
+    Ignore,
+}
+
 /// A column assignment in an `UPDATE` (`column = expression`).
 ///
 /// Built by [`Column::set`](crate::Column::set). The right-hand side is an
@@ -38,6 +56,8 @@ pub struct InsertStatement {
     pub rows: Vec<Vec<Value>>,
     /// Columns to return from the inserted rows; empty means no `RETURNING`.
     pub returning: Vec<&'static str>,
+    /// Conflict resolution strategy; default is [`OnConflict::None`].
+    pub on_conflict: OnConflict,
 }
 
 /// An `UPDATE` statement.
@@ -49,6 +69,8 @@ pub struct UpdateStatement {
     pub assignments: Vec<Assignment>,
     /// The predicates restricting which rows change, joined by `AND`.
     pub filters: Vec<Expr>,
+    /// Columns to return from the updated rows; empty means no `RETURNING`.
+    pub returning: Vec<&'static str>,
 }
 
 /// A `DELETE` statement.
@@ -58,4 +80,6 @@ pub struct DeleteStatement {
     pub table: &'static str,
     /// The predicates restricting which rows are removed, joined by `AND`.
     pub filters: Vec<Expr>,
+    /// Columns to return from the deleted rows; empty means no `RETURNING`.
+    pub returning: Vec<&'static str>,
 }

@@ -8,7 +8,7 @@
 use crate::dialect::Dialect;
 use crate::query::ast::{JoinKind, SelectItem, SelectStatement, UnionStatement};
 use crate::query::expr::Expr;
-use crate::query::write::{DeleteStatement, InsertStatement, UpdateStatement};
+use crate::query::write::{DeleteStatement, InsertStatement, OnConflict, UpdateStatement};
 use crate::value::Value;
 
 /// Builds a SQL string and its bound parameters for a dialect.
@@ -389,7 +389,11 @@ impl<'a> QueryWriter<'a> {
 
     /// Renders an `INSERT` statement.
     pub fn write_insert(&mut self, statement: &InsertStatement) {
-        self.push_sql("INSERT INTO ");
+        match statement.on_conflict {
+            OnConflict::None    => self.push_sql("INSERT INTO "),
+            OnConflict::Replace => self.push_sql("INSERT OR REPLACE INTO "),
+            OnConflict::Ignore  => self.push_sql("INSERT OR IGNORE INTO "),
+        }
         self.push_identifier(statement.table);
         self.push_sql(" (");
         for (index, column) in statement.columns.iter().enumerate() {
@@ -437,6 +441,15 @@ impl<'a> QueryWriter<'a> {
             self.write_expr(&assignment.value);
         }
         self.write_where(&statement.filters);
+        if !statement.returning.is_empty() {
+            self.push_sql(" RETURNING ");
+            for (index, column) in statement.returning.iter().enumerate() {
+                if index != 0 {
+                    self.push_sql(", ");
+                }
+                self.push_identifier(column);
+            }
+        }
     }
 
     /// Renders a `DELETE` statement.
@@ -444,6 +457,15 @@ impl<'a> QueryWriter<'a> {
         self.push_sql("DELETE FROM ");
         self.push_identifier(statement.table);
         self.write_where(&statement.filters);
+        if !statement.returning.is_empty() {
+            self.push_sql(" RETURNING ");
+            for (index, column) in statement.returning.iter().enumerate() {
+                if index != 0 {
+                    self.push_sql(", ");
+                }
+                self.push_identifier(column);
+            }
+        }
     }
 
     /// Consumes the writer, returning the SQL string and its bound parameters.

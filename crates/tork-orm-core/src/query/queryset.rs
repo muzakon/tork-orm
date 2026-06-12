@@ -412,9 +412,44 @@ impl<M: Model> QuerySet<M> {
             table: self.statement.table,
             assignments: assignments.into_iter().collect(),
             filters: self.statement.filters,
+            returning: Vec::new(),
         };
         let (sql, params) = render_update(executor.dialect(), &statement);
         Ok(executor.execute(sql, params).await?.rows_affected)
+    }
+
+    /// Updates every row matching the query's filters and returns the changed rows.
+    ///
+    /// Like [`update`](Self::update) but appends `RETURNING` to the statement,
+    /// fetching the stored values after the update. All columns of `M` are
+    /// returned and deserialized into `Vec<M>`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use tork_orm_core::{Database, Model};
+    /// # async fn run<M: Model>(db: Database, col: tork_orm_core::Column<M, bool>) -> tork_orm_core::Result<()> {
+    /// let updated = M::query()
+    ///     .update_returning(&db, [col.set(false)])
+    ///     .await?;
+    /// # let _ = updated; Ok(())
+    /// # }
+    /// ```
+    pub async fn update_returning<E: Executor>(
+        self,
+        executor: E,
+        assignments: impl IntoIterator<Item = Assignment>,
+    ) -> crate::Result<Vec<M>> {
+        let returning = M::COLUMNS.iter().map(|c| c.name).collect();
+        let statement = UpdateStatement {
+            table: self.statement.table,
+            assignments: assignments.into_iter().collect(),
+            filters: self.statement.filters,
+            returning,
+        };
+        let (sql, params) = render_update(executor.dialect(), &statement);
+        let rows = executor.fetch_all(sql, params).await?;
+        rows.iter().map(M::from_row).collect()
     }
 
     /// Deletes every row matching the query's filters, returning the count removed.
@@ -422,9 +457,40 @@ impl<M: Model> QuerySet<M> {
         let statement = DeleteStatement {
             table: self.statement.table,
             filters: self.statement.filters,
+            returning: Vec::new(),
         };
         let (sql, params) = render_delete(executor.dialect(), &statement);
         Ok(executor.execute(sql, params).await?.rows_affected)
+    }
+
+    /// Deletes every row matching the query's filters and returns the removed rows.
+    ///
+    /// Like [`delete`](Self::delete) but appends `RETURNING`, so the deleted
+    /// rows are available after removal. Useful for soft-delete pipelines or
+    /// audit logging.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use tork_orm_core::{Database, Model};
+    /// # async fn run<M: Model>(db: Database) -> tork_orm_core::Result<()> {
+    /// let removed = M::query()
+    ///     .filter(M::query().into_statement().filters.is_empty().then_some(tork_orm_core::Expr::CountStar).unwrap_or(tork_orm_core::Expr::CountStar))
+    ///     .delete_returning(&db)
+    ///     .await?;
+    /// # let _ = removed; Ok(())
+    /// # }
+    /// ```
+    pub async fn delete_returning<E: Executor>(self, executor: E) -> crate::Result<Vec<M>> {
+        let returning = M::COLUMNS.iter().map(|c| c.name).collect();
+        let statement = DeleteStatement {
+            table: self.statement.table,
+            filters: self.statement.filters,
+            returning,
+        };
+        let (sql, params) = render_delete(executor.dialect(), &statement);
+        let rows = executor.fetch_all(sql, params).await?;
+        rows.iter().map(M::from_row).collect()
     }
 }
 
