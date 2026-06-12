@@ -468,4 +468,122 @@ User::query()
     .await?;
 ```
 
+---
+
+## 15. Subqueries
+
+Subqueries let you use the result of one query inside another. There are two forms: a membership test (`IN (SELECT ...)`) and a scalar subquery used as an expression value.
+
+### A. IN Subquery
+
+`Column::in_subquery` builds a `WHERE col IN (SELECT ...)` predicate. The inner query can be filtered and projected like any other `QuerySet`.
+
+```rust
+// Fetch posts whose author is an active user.
+let posts = Post::query()
+    .filter(Post::user_id.in_subquery(
+        User::query()
+            .filter(User::is_active.eq(true))
+            .select((User::id,)),
+    ))
+    .all(&db)
+    .await?;
+```
+
+Use `not_in_subquery` for the inverse:
+
+```rust
+// Fetch posts whose author has been deactivated.
+let orphaned = Post::query()
+    .filter(Post::user_id.not_in_subquery(
+        User::query()
+            .filter(User::is_active.eq(true))
+            .select((User::id,)),
+    ))
+    .all(&db)
+    .await?;
+```
+
+### B. Scalar Subquery
+
+`QuerySet::to_subquery` converts a query into a `(SELECT ...)` expression that can be used anywhere an `Expr` is accepted — a filter, a projection, or a `HAVING` clause.
+
+```rust
+// Fetch posts with above-average view count.
+let avg_views = Post::query()
+    .select((Post::view_count.avg().as_("avg"),))
+    .to_subquery();
+
+let popular = Post::query()
+    .filter(Expr::binary(
+        Post::view_count.expr(),
+        BinaryOp::Gt,
+        avg_views,
+    ))
+    .all(&db)
+    .await?;
+```
+
+---
+
+## 16. Scalar Functions
+
+Tork ORM ships a set of common scalar SQL functions. Each is available as a free function (imported via `use tork_orm::prelude::*`) and, for the most common column types, as a method on the column handle.
+
+### Numeric functions
+
+| Free function | Column method | SQL | Description |
+|---|---|---|---|
+| `round(expr)` | `col.round()` | `round(expr)` | Round to nearest integer |
+| `ceil(expr)` | `col.ceil()` | `ceil(expr)` | Ceiling (smallest integer >= value) |
+| `floor(expr)` | `col.floor()` | `floor(expr)` | Floor (largest integer <= value) |
+| `abs(expr)` | `col.abs()` | `abs(expr)` | Absolute value |
+
+```rust
+Post::query()
+    .select((Post::price.round().as_("rounded"),))
+    .all_as::<PriceRow>(&db)
+    .await?;
+```
+
+### String functions
+
+| Free function | Column method | SQL | Description |
+|---|---|---|---|
+| `lower(expr)` | `col.lower()` | `lower(expr)` | Lowercase |
+| `upper(expr)` | `col.upper()` | `upper(expr)` | Uppercase |
+| `trim(expr)` | `col.trim()` | `trim(expr)` | Strip leading/trailing whitespace |
+| `length(expr)` | `col.length()` | `length(expr)` | Character count |
+| `substr(expr, start)` | `col.substr(start)` | `substr(expr, start)` | Substring from `start` (1-based) |
+| `substr_len(expr, start, len)` | `col.substr_len(start, len)` | `substr(expr, start, len)` | Substring of length `len` |
+| `concat(args)` | — | `concat(args...)` | Concatenate two or more strings |
+
+```rust
+// First three characters of each username
+User::query()
+    .select((User::username.substr_len(1, 3).as_("prefix"),))
+    .all_as::<PrefixRow>(&db)
+    .await?;
+
+// Combine first and last name
+Post::query()
+    .select((concat([Expr::from(User::first_name), Expr::from(User::last_name)]).as_("full_name"),))
+    .all_as::<NameRow>(&db)
+    .await?;
+```
+
+### Null-handling
+
+| Free function | SQL | Description |
+|---|---|---|
+| `coalesce(a, b)` | `coalesce(a, b)` | First non-NULL value |
+
+### Escape hatch
+
+`func("name", [args...])` calls any SQL function not covered by the built-ins:
+
+```rust
+let expr = func("date", [Expr::column("events", "created_at")]);
+```
+
 The `i`-prefixed variants delegate to `.ilike()`, which on SQLite renders as `lower(column) LIKE lower(pattern)`. Wildcards inside the search string (`%`, `_`) are **not** escaped — use `.like()` directly if you need to pass a pattern with explicit wildcards.

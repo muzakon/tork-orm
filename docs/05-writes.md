@@ -66,37 +66,53 @@ assert_eq!(affected_rows, 1);
 ### B. Bulk Updates (`QuerySet::update`)
 To update specific columns on multiple rows matching a query filter without fetching them first, use the `update` method on a `QuerySet`.
 
-It takes a list of column assignments (e.g., `Column.set(value)`) and returns the number of updated rows.
+It takes a list of column assignments (built with `Column::set`) and returns the number of updated rows.
+
+`Column::set` accepts either a typed literal or any `Expr`, so you can express atomic increment patterns without a read-modify-write cycle:
 
 ```rust
-// Deactivate all users whose usernames do not equal 'bob'
+// Literal assignment — deactivate every user whose username is not "bob".
 let deactivated_count = User::query()
     .filter(User::username.ne("bob"))
-    .update(&db, [
-        User::is_active.set(false),
-    ])
+    .update(&db, [User::is_active.set(false)])
     .await?;
 
-println!("Deactivated {} users", deactivated_count);
+// Expression assignment — atomically increment a counter.
+Post::query()
+    .filter(Post::id.eq(post_id))
+    .update(&db, [Post::view_count.set(Post::view_count.add(1_i64))])
+    .await?;
 ```
 
 ---
 
-## 3. Deleting Records (`QuerySet::delete`)
+## 3. Deleting Records
 
-Deletions in Tork ORM are executed via the `QuerySet` builder. This allows deleting specific rows matching a filter, or emptying a table entirely.
-
-It returns the number of deleted rows as a `usize`.
+### A. Delete an Instance (`Model::delete`)
+If you have a model instance in memory, call `delete` directly on it. The row matching the instance's primary key is removed.
 
 ```rust
-// Delete a specific user
+let user = User::query()
+    .filter(User::username.eq("bob"))
+    .one(&db)
+    .await?;
+
+let affected = user.delete(&db).await?;
+assert_eq!(affected, 1);
+```
+
+### B. Bulk Delete (`QuerySet::delete`)
+Delete every row matching a query filter — or the whole table if no filter is applied.
+
+```rust
+// Delete a specific user by filter.
 let deleted = User::query()
     .filter(User::username.eq("bob"))
     .delete(&db)
     .await?;
 assert_eq!(deleted, 1);
 
-// Delete all users in the table
+// Delete all rows in the table.
 let total_deleted = User::query().delete(&db).await?;
 println!("Deleted {} remaining users", total_deleted);
 ```

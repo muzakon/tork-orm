@@ -15,6 +15,8 @@ This guide walks you through the ORM from the ground up. Each chapter is filled 
 7. [Aggregates, Grouping, and Projections](07-aggregates-and-projections.md)
 8. [Migrations, Schema Generation, and the CLI](08-migrations-and-cli.md)
 9. [Tork Framework Integration](09-framework-integration.md)
+10. [Database Transactions](10-transactions.md)
+11. [Scalar Functions](11-functions.md)
 
 ## Key Features
 
