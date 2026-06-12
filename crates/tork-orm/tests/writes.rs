@@ -322,3 +322,148 @@ async fn delete_returning_all_rows_clears_table() {
     assert_eq!(names, ["alice", "bob"]);
     assert_eq!(User::query().count(&db).await.unwrap(), 0);
 }
+
+// ── get_or_create ────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn get_or_create_creates_when_not_found() {
+    let db = empty_db().await;
+    let (user, created) = User::get_or_create(
+        &db,
+        |q| q.filter(User::username.eq("alice")),
+        &new_user("alice"),
+    )
+    .await
+    .unwrap();
+
+    assert!(created);
+    assert_eq!(user.username, "alice");
+    assert!(user.is_active);
+    assert_eq!(User::query().count(&db).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn get_or_create_returns_existing() {
+    let db = empty_db().await;
+    let _ = User::create(&db, &new_user("alice")).await.unwrap();
+
+    let (user, created) = User::get_or_create(
+        &db,
+        |q| q.filter(User::username.eq("alice")),
+        &new_user("alice"),
+    )
+    .await
+    .unwrap();
+
+    assert!(!created);
+    assert_eq!(user.username, "alice");
+    assert_eq!(User::query().count(&db).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn get_or_create_errors_on_multiple_matches() {
+    let db = empty_db().await;
+    User::bulk_create(&db, &[new_user("alice"), User {
+        id: 0,
+        username: "alice2".into(),
+        email: "alice2@example.com".into(),
+        is_active: true,
+    }])
+    .await
+    .unwrap();
+
+    let err = User::get_or_create(
+        &db,
+        |q| q.filter_raw("username LIKE ?", ["alice%"]),
+        &new_user("bob"),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::MultipleFound);
+}
+
+// ── update_or_create ─────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn update_or_create_creates_when_not_found() {
+    let db = empty_db().await;
+    let (user, created) = User::update_or_create(
+        &db,
+        |q| q.filter(User::username.eq("alice")),
+        &new_user("alice"),
+    )
+    .await
+    .unwrap();
+
+    assert!(created);
+    assert_eq!(user.username, "alice");
+    assert_eq!(User::query().count(&db).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn update_or_create_updates_existing() {
+    let db = empty_db().await;
+    let _ = User::create(&db, &new_user("alice")).await.unwrap();
+
+    let updated_value = User {
+        id: 0,
+        username: "alice".into(),
+        email: "alice-new@example.com".into(),
+        is_active: false,
+    };
+    let (user, created) = User::update_or_create(
+        &db,
+        |q| q.filter(User::username.eq("alice")),
+        &updated_value,
+    )
+    .await
+    .unwrap();
+
+    assert!(!created);
+    assert_eq!(user.email, "alice-new@example.com");
+    assert!(!user.is_active);
+    assert_eq!(User::query().count(&db).await.unwrap(), 1);
+}
+
+// ── first_or_create ──────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn first_or_create_creates_when_not_found() {
+    let db = empty_db().await;
+    let user = User::first_or_create(
+        &db,
+        |q| q.filter(User::username.eq("alice")),
+        &new_user("alice"),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(user.username, "alice");
+    assert_eq!(User::query().count(&db).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn first_or_create_returns_first_if_multiple_match() {
+    let db = empty_db().await;
+    User::bulk_create(
+        &db,
+        &[new_user("alice"), User {
+            id: 0,
+            username: "alice2".into(),
+            email: "alice2@example.com".into(),
+            is_active: true,
+        }],
+    )
+    .await
+    .unwrap();
+
+    let user = User::first_or_create(
+        &db,
+        |q| q.filter_raw("username LIKE ?", ["alice%"]),
+        &new_user("bob"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(user.username, "alice");
+    assert_eq!(User::query().count(&db).await.unwrap(), 2);
+}

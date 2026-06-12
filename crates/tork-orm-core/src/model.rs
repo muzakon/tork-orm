@@ -144,6 +144,79 @@ pub trait Model: FromRow + Send + Sync + 'static {
         QuerySet::new()
     }
 
+    /// Finds a single row by its primary key.
+    ///
+    /// Returns the row if found, or
+    /// [`ErrorKind::NotFound`](crate::ErrorKind::NotFound) when no row has that
+    /// key.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use tork_orm_core::{Database, Model, Value};
+    /// # struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } }
+    /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
+    /// let user = User::find(&db, 42).await?;
+    /// # let _ = user; Ok(())
+    /// # }
+    /// ```
+    fn find<E: Executor + Send>(
+        executor: E,
+        pk: impl crate::value::BindValue + Send,
+    ) -> impl std::future::Future<Output = crate::Result<Self>> + Send
+    where
+        Self: Sized,
+    {
+        async move {
+            Self::query()
+                .filter(Expr::binary(
+                    Expr::column(Self::TABLE, Self::PRIMARY_KEY),
+                    BinaryOp::Eq,
+                    Expr::value(pk.to_value()),
+                ))
+                .one(executor)
+                .await
+        }
+    }
+
+    /// Finds a single row by its primary key, returning `None` when it does not
+    /// exist.
+    ///
+    /// Errors with [`ErrorKind::MultipleFound`](crate::ErrorKind::MultipleFound) if
+    /// more than one row matches (which should never happen for a proper primary
+    /// key, but the check is there for safety).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use tork_orm_core::{Database, Model, Value};
+    /// # struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } }
+    /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
+    /// if let Some(user) = User::get_or_none(&db, 42).await? {
+    ///     println!("found user {:?}", user.primary_key_value());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    fn get_or_none<E: Executor + Send>(
+        executor: E,
+        pk: impl crate::value::BindValue + Send,
+    ) -> impl std::future::Future<Output = crate::Result<Option<Self>>> + Send
+    where
+        Self: Sized,
+    {
+        async move {
+            Self::query()
+                .filter(Expr::binary(
+                    Expr::column(Self::TABLE, Self::PRIMARY_KEY),
+                    BinaryOp::Eq,
+                    Expr::value(pk.to_value()),
+                ))
+                .one_or_none(executor)
+                .await
+        }
+    }
+
     /// Inserts `value` and returns the stored row, including any
     /// database-assigned columns (such as an auto-increment primary key).
     fn create<E: Executor + Send>(
@@ -317,6 +390,141 @@ pub trait Model: FromRow + Send + Sync + 'static {
                 .first()
                 .ok_or_else(|| OrmError::query("upserted row could not be reloaded"))?;
             Self::from_row(row)
+        }
+    }
+
+    /// Tries to find a row matching `filter`, creating it with `value` if none
+    /// exists.
+    ///
+    /// Returns `(row, true)` if a new row was created, or `(row, false)` if an
+    /// existing row was found. The lookup uses
+    /// [`one_or_none`](crate::QuerySet::one_or_none) so it errors when the filter
+    /// matches more than one row.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use tork_orm_core::{Database, Model, Value};
+    /// # struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } }
+    /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
+    /// let (user, created) = User::get_or_create(
+    ///     &db,
+    ///     |q| q.filter(User::query().into_statement().filters.is_empty().then_some(tork_orm_core::Expr::CountStar).unwrap_or(tork_orm_core::Expr::CountStar)),
+    ///     &User { /* ... */ },
+    /// ).await?;
+    /// # let _ = (user, created); Ok(())
+    /// # }
+    /// ```
+    fn get_or_create<E, F>(
+        executor: E,
+        filter: F,
+        value: &Self,
+    ) -> impl std::future::Future<Output = crate::Result<(Self, bool)>> + Send
+    where
+        E: Executor + Send + Sync,
+        F: FnOnce(QuerySet<Self>) -> QuerySet<Self> + Send,
+        Self: Sized,
+    {
+        async move {
+            match filter(Self::query()).one_or_none(&executor).await? {
+                Some(row) => Ok((row, false)),
+                None => Self::create(executor, value).await.map(|row| (row, true)),
+            }
+        }
+    }
+
+    /// Tries to find a row matching `filter`, updating it with `value`'s fields
+    /// if found, or creating it if not.
+    ///
+    /// Returns `(row, true)` if a new row was created, or `(row, false)` if an
+    /// existing row was found and updated.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use tork_orm_core::{Database, Model, Value};
+    /// # struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } }
+    /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
+    /// let (user, created) = User::update_or_create(
+    ///     &db,
+    ///     |q| q.filter(User::query().into_statement().filters.is_empty().then_some(tork_orm_core::Expr::CountStar).unwrap_or(tork_orm_core::Expr::CountStar)),
+    ///     &User { /* ... */ },
+    /// ).await?;
+    /// # let _ = (user, created); Ok(())
+    /// # }
+    /// ```
+    fn update_or_create<E, F>(
+        executor: E,
+        filter: F,
+        value: &Self,
+    ) -> impl std::future::Future<Output = crate::Result<(Self, bool)>> + Send
+    where
+        E: Executor + Send + Sync,
+        F: FnOnce(QuerySet<Self>) -> QuerySet<Self> + Send,
+        Self: Sized,
+    {
+        async move {
+            match filter(Self::query()).one_or_none(&executor).await? {
+                Some(found) => {
+                    let assignments: Vec<Assignment> = value
+                        .insert_values()
+                        .into_iter()
+                        .map(|(column, v)| Assignment::new(column, Expr::value(v)))
+                        .collect();
+                    let pk_col = Expr::column(Self::TABLE, Self::PRIMARY_KEY);
+                    let pk_val = Expr::value(found.primary_key_value());
+                    let statement = UpdateStatement {
+                        table: Self::TABLE,
+                        assignments,
+                        filters: vec![Expr::binary(pk_col, BinaryOp::Eq, pk_val)],
+                        returning: Vec::new(),
+                    };
+                    let (sql, params) = crate::dialect::render_update(executor.dialect(), &statement);
+                    executor.execute(sql, params).await?;
+                    let updated = Self::find(executor, found.primary_key_value()).await?;
+                    Ok((updated, false))
+                }
+                None => Self::create(executor, value).await.map(|row| (row, true)),
+            }
+        }
+    }
+
+    /// Tries to find the first row matching `filter`, creating it with `value`
+    /// if none exists.
+    ///
+    /// Like [`get_or_create`](Self::get_or_create) but uses
+    /// [`first`](crate::QuerySet::first) for the lookup, so the filter matching
+    /// multiple rows silently returns the first one.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use tork_orm_core::{Database, Model, Value};
+    /// # struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } }
+    /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
+    /// let user = User::first_or_create(
+    ///     &db,
+    ///     |q| q.filter(User::query().into_statement().filters.is_empty().then_some(tork_orm_core::Expr::CountStar).unwrap_or(tork_orm_core::Expr::CountStar)),
+    ///     &User { /* ... */ },
+    /// ).await?;
+    /// # let _ = user; Ok(())
+    /// # }
+    /// ```
+    fn first_or_create<E, F>(
+        executor: E,
+        filter: F,
+        value: &Self,
+    ) -> impl std::future::Future<Output = crate::Result<Self>> + Send
+    where
+        E: Executor + Send + Sync,
+        F: FnOnce(QuerySet<Self>) -> QuerySet<Self> + Send,
+        Self: Sized,
+    {
+        async move {
+            match filter(Self::query()).first(&executor).await? {
+                Some(row) => Ok(row),
+                None => Self::create(executor, value).await,
+            }
         }
     }
 
