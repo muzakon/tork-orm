@@ -384,6 +384,8 @@ struct FieldArgs {
     updated_at: bool,
     /// The optimistic-lock version column.
     version: bool,
+    /// The soft-delete timestamp column.
+    deleted_at: bool,
 }
 
 impl Parse for FieldArgs {
@@ -408,6 +410,7 @@ impl Parse for FieldArgs {
                     args.default = Some(FieldDefault::Now);
                 }
                 "version" => args.version = true,
+                "deleted_at" => args.deleted_at = true,
                 "index" => {
                     // Bare `index` enables a single-column index; `index = false`
                     // (or `= true`) toggles a foreign key's automatic index.
@@ -529,6 +532,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     // Lifecycle columns: the auto-touched `updated_at` and the optimistic-lock
     // `version` (with its field for the in-memory accessors).
     let mut updated_at_column: Option<String> = None;
+    let mut deleted_at_column: Option<String> = None;
     let mut version_field: Option<(Ident, String)> = None;
     // Indexes built from the field-level attributes (`unique`/`index`) plus the
     // automatic index on each foreign key.
@@ -580,6 +584,21 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         // `default_now` path below. `version` must be an integer.
         if args.updated_at {
             updated_at_column = Some(column_name.clone());
+        }
+        if args.deleted_at {
+            if !(nullable && is_timestamp_type(base_ty)) {
+                return Err(syn::Error::new_spanned(
+                    field_ty,
+                    "`deleted_at` requires an `Option<OffsetDateTime>` field",
+                ));
+            }
+            if deleted_at_column.is_some() {
+                return Err(syn::Error::new_spanned(
+                    field_ty,
+                    "a model may declare only one `deleted_at` column",
+                ));
+            }
+            deleted_at_column = Some(column_name.clone());
         }
         if args.version {
             if !(is_integer_type(base_ty)) {
@@ -817,6 +836,13 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         },
         None => quote!(),
     };
+    let deleted_at_const = match &deleted_at_column {
+        Some(column) => quote! {
+            const DELETED_AT: ::core::option::Option<&'static str> =
+                ::core::option::Option::Some(#column);
+        },
+        None => quote!(),
+    };
     let version_items = match &version_field {
         Some((field, column)) => quote! {
             const VERSION: ::core::option::Option<&'static str> =
@@ -861,6 +887,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             ];
             const PRIMARY_KEY: &'static str = #pk_column;
             #updated_at_const
+            #deleted_at_const
             #version_items
 
             fn insert_values(&self) -> ::std::vec::Vec<(&'static str, #krate::Value)> {

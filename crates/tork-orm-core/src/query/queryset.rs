@@ -50,6 +50,10 @@ use crate::value::Value;
 /// ```
 pub struct QuerySet<M: Model> {
     statement: SelectStatement,
+    /// Whether the automatic soft-delete scope filter (`deleted_at IS NULL`) is
+    /// currently present as the first filter, so [`with_deleted`](QuerySet::with_deleted)
+    /// can drop it. Always `false` for models without a soft-delete column.
+    scope_active: bool,
     _marker: PhantomData<fn() -> M>,
 }
 
@@ -98,10 +102,44 @@ impl<M: Model> QuerySet<M> {
                 column: column.name,
             })
             .collect();
+        let mut statement = SelectStatement::new(M::TABLE, projection);
+        // Soft-delete models are scoped to non-deleted rows by default. The filter
+        // goes in first so it is baked into every terminal, subquery, and union;
+        // `with_deleted`/`only_deleted` adjust it.
+        let scope_active = if let Some(column) = M::DELETED_AT {
+            statement.filters.push(scope_filter(M::TABLE, column, false));
+            true
+        } else {
+            false
+        };
         Self {
-            statement: SelectStatement::new(M::TABLE, projection),
+            statement,
+            scope_active,
             _marker: PhantomData,
         }
+    }
+
+    /// Includes soft-deleted rows in the results, dropping the default
+    /// `deleted_at IS NULL` scope. A no-op for models without a soft-delete column.
+    pub fn with_deleted(mut self) -> Self {
+        if self.scope_active {
+            self.statement.filters.remove(0);
+            self.scope_active = false;
+        }
+        self
+    }
+
+    /// Restricts the results to only soft-deleted rows (`deleted_at IS NOT NULL`).
+    /// A no-op for models without a soft-delete column.
+    pub fn only_deleted(mut self) -> Self {
+        if let Some(column) = M::DELETED_AT {
+            if self.scope_active {
+                self.statement.filters.remove(0);
+                self.scope_active = false;
+            }
+            self.statement.filters.push(scope_filter(M::TABLE, column, true));
+        }
+        self
     }
 
     /// Adds a predicate joined with `AND`.
@@ -866,13 +904,58 @@ impl<M: Model> QuerySet<M> {
     }
 
     /// Deletes every row matching the query's filters, returning the count removed.
+    ///
+    /// On a model with a `#[field(deleted_at)]` column this is a *soft* delete: the
+    /// rows are stamped with the current time instead of being removed. Use
+    /// [`hard_delete`](Self::hard_delete) to remove them permanently.
     pub async fn delete<E: Executor>(self, executor: E) -> crate::Result<u64> {
+        if let Some(column) = M::DELETED_AT {
+            let statement = UpdateStatement {
+                table: self.statement.table,
+                assignments: vec![Assignment::new(column, Expr::raw("CURRENT_TIMESTAMP"))],
+                filters: self.statement.filters,
+                returning: Vec::new(),
+            };
+            let (sql, params) = render_update(executor.dialect(), &statement);
+            return Ok(executor.execute(sql, params).await?.rows_affected);
+        }
         let statement = DeleteStatement {
             table: self.statement.table,
             filters: self.statement.filters,
             returning: Vec::new(),
         };
         let (sql, params) = render_delete(executor.dialect(), &statement);
+        Ok(executor.execute(sql, params).await?.rows_affected)
+    }
+
+    /// Permanently removes every row matching the query's filters, bypassing
+    /// soft-delete. Identical to [`delete`](Self::delete) for models without a
+    /// soft-delete column.
+    pub async fn hard_delete<E: Executor>(self, executor: E) -> crate::Result<u64> {
+        let statement = DeleteStatement {
+            table: self.statement.table,
+            filters: self.statement.filters,
+            returning: Vec::new(),
+        };
+        let (sql, params) = render_delete(executor.dialect(), &statement);
+        Ok(executor.execute(sql, params).await?.rows_affected)
+    }
+
+    /// Clears the soft-delete mark (`deleted_at = NULL`) on every matching row,
+    /// returning the count restored. Pair with [`only_deleted`](Self::only_deleted)
+    /// or [`with_deleted`](Self::with_deleted), since the default scope hides
+    /// soft-deleted rows. A no-op for models without a soft-delete column.
+    pub async fn restore<E: Executor>(self, executor: E) -> crate::Result<u64> {
+        let Some(column) = M::DELETED_AT else {
+            return Ok(0);
+        };
+        let statement = UpdateStatement {
+            table: self.statement.table,
+            assignments: vec![Assignment::new(column, Expr::value(Value::Null))],
+            filters: self.statement.filters,
+            returning: Vec::new(),
+        };
+        let (sql, params) = render_update(executor.dialect(), &statement);
         Ok(executor.execute(sql, params).await?.rows_affected)
     }
 
@@ -953,6 +1036,12 @@ pub(crate) fn validate_for_dialect(
         }
     }
     Ok(())
+}
+
+/// Builds a soft-delete scope predicate: `deleted_at IS NULL` (active rows) or
+/// `deleted_at IS NOT NULL` (only deleted) when `deleted` is `true`.
+fn scope_filter(table: &'static str, column: &'static str, deleted: bool) -> Expr {
+    Expr::is_null(Expr::column(table, column), deleted)
 }
 
 /// Builds the keyset (seek) predicate for an `ORDER BY` and a boundary `cursor`.

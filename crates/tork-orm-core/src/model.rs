@@ -156,6 +156,14 @@ pub trait Model: FromRow + ModelHooks + Clone + Send + Sync + 'static {
     /// the model declares a `#[field(updated_at)]` column. `None` otherwise.
     const UPDATED_AT: Option<&'static str> = None;
 
+    /// The soft-delete timestamp column, if the model declares a
+    /// `#[field(deleted_at)]` column. `None` otherwise.
+    ///
+    /// When set, [`delete`](Self::delete) and `QuerySet::delete` stamp this column
+    /// instead of removing the row, and `Model::query` excludes rows where it is
+    /// non-null by default.
+    const DELETED_AT: Option<&'static str> = None;
+
     /// The optimistic-lock version column, if the model declares a
     /// `#[field(version)]` column. `None` otherwise.
     ///
@@ -784,13 +792,44 @@ pub trait Model: FromRow + ModelHooks + Clone + Send + Sync + 'static {
     {
         async move {
             self.before_delete();
+            let removed = if let Some(column) = Self::DELETED_AT {
+                // Soft delete: stamp the row's deleted_at instead of removing it.
+                let statement = UpdateStatement {
+                    table: Self::TABLE,
+                    assignments: vec![Assignment::new(column, Expr::raw("CURRENT_TIMESTAMP"))],
+                    filters: vec![self.primary_key_filter()],
+                    returning: Vec::new(),
+                };
+                let (sql, params) = crate::dialect::render_update(executor.dialect(), &statement);
+                executor.execute(sql, params).await?.rows_affected
+            } else {
+                let statement = DeleteStatement {
+                    table: Self::TABLE,
+                    filters: vec![self.primary_key_filter()],
+                    returning: Vec::new(),
+                };
+                let (sql, params) = crate::dialect::render_delete(executor.dialect(), &statement);
+                executor.execute(sql, params).await?.rows_affected
+            };
+            self.after_delete(&executor).await?;
+            Ok(removed)
+        }
+    }
+
+    /// Permanently removes this row, bypassing soft-delete. Identical to
+    /// [`delete`](Self::delete) for models without a soft-delete column.
+    fn force_delete<E: Executor + Send + Sync>(
+        &self,
+        executor: E,
+    ) -> impl std::future::Future<Output = crate::Result<u64>> + Send
+    where
+        Self: Sized,
+    {
+        async move {
+            self.before_delete();
             let statement = DeleteStatement {
                 table: Self::TABLE,
-                filters: vec![Expr::binary(
-                    Expr::column(Self::TABLE, Self::PRIMARY_KEY),
-                    BinaryOp::Eq,
-                    Expr::value(self.primary_key_value()),
-                )],
+                filters: vec![self.primary_key_filter()],
                 returning: Vec::new(),
             };
             let (sql, params) = crate::dialect::render_delete(executor.dialect(), &statement);
@@ -798,5 +837,42 @@ pub trait Model: FromRow + ModelHooks + Clone + Send + Sync + 'static {
             self.after_delete(&executor).await?;
             Ok(removed)
         }
+    }
+
+    /// Clears this row's soft-delete mark (`deleted_at = NULL`), returning the
+    /// number of rows restored. A no-op (returns `Ok(0)`) for models without a
+    /// soft-delete column.
+    fn restore<E: Executor + Send + Sync>(
+        &self,
+        executor: E,
+    ) -> impl std::future::Future<Output = crate::Result<u64>> + Send
+    where
+        Self: Sized,
+    {
+        async move {
+            let Some(column) = Self::DELETED_AT else {
+                return Ok(0);
+            };
+            let statement = UpdateStatement {
+                table: Self::TABLE,
+                assignments: vec![Assignment::new(column, Expr::value(Value::Null))],
+                filters: vec![self.primary_key_filter()],
+                returning: Vec::new(),
+            };
+            let (sql, params) = crate::dialect::render_update(executor.dialect(), &statement);
+            Ok(executor.execute(sql, params).await?.rows_affected)
+        }
+    }
+
+    /// Builds the `primary_key = <value>` predicate for this instance.
+    fn primary_key_filter(&self) -> Expr
+    where
+        Self: Sized,
+    {
+        Expr::binary(
+            Expr::column(Self::TABLE, Self::PRIMARY_KEY),
+            BinaryOp::Eq,
+            Expr::value(self.primary_key_value()),
+        )
     }
 }

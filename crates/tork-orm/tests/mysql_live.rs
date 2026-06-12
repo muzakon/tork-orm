@@ -620,3 +620,40 @@ async fn lifecycle_version_conflict_and_timestamp() {
     assert_eq!(b.save(&db).await.unwrap_err().kind(), ErrorKind::Conflict);
     assert_eq!(Doc::find(&db, created.id).await.unwrap().body, "from-a");
 }
+
+#[derive(Debug, Clone, Model, PartialEq)]
+#[table(name = "my_notes")]
+struct Note {
+    #[field(primary_key, auto)]
+    id: i64,
+    #[field(varchar(length = 50))]
+    body: String,
+    #[field(deleted_at)]
+    deleted_at: Option<OffsetDateTime>,
+}
+
+#[tokio::test]
+async fn soft_delete_scope_and_restore() {
+    let db = connect().await;
+    reset(
+        &db,
+        "DROP TABLE IF EXISTS my_notes",
+        "CREATE TABLE my_notes (id BIGINT AUTO_INCREMENT PRIMARY KEY, body VARCHAR(50) NOT NULL, deleted_at DATETIME NULL)",
+    )
+    .await;
+
+    let a = Note::create(&db, &Note { id: 0, body: "a".into(), deleted_at: None }).await.unwrap();
+    Note::create(&db, &Note { id: 0, body: "b".into(), deleted_at: None }).await.unwrap();
+
+    a.delete(&db).await.unwrap();
+    assert_eq!(Note::query().count(&db).await.unwrap(), 1);
+    assert_eq!(Note::query().with_deleted().count(&db).await.unwrap(), 2);
+
+    let deleted = Note::query().only_deleted().one(&db).await.unwrap();
+    assert!(deleted.deleted_at.is_some());
+    deleted.restore(&db).await.unwrap();
+    assert_eq!(Note::query().count(&db).await.unwrap(), 2);
+
+    let removed = Note::query().with_deleted().hard_delete(&db).await.unwrap();
+    assert_eq!(removed, 2);
+}
