@@ -79,6 +79,9 @@ impl Dialect for SqliteDialect {
             // SQLite has no native JSON/UUID/array types; a `sqlite`-declared project
             // is rejected at compile time before reaching here. Map to TEXT defensively.
             SqlType::Json | SqlType::Uuid | SqlType::Array(_) => out.push_str("TEXT"),
+            // SQLite has no native enum; stored as TEXT with a CHECK appended by the
+            // DDL renderer.
+            SqlType::Enum { .. } => out.push_str("TEXT"),
         }
     }
 

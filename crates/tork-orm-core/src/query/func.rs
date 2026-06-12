@@ -6,6 +6,8 @@
 //! [`Expr`], so a column, a value, or another function call all work.
 
 use crate::query::expr::Expr;
+// Used by the PostgreSQL-only function builders below.
+#[cfg(feature = "postgres")]
 use crate::Value;
 
 /// Builds a call to an arbitrary scalar function, `name(args...)`.
@@ -494,4 +496,13 @@ pub fn ts_headline(
 #[cfg(feature = "postgres")]
 pub fn tsquery(query_text: &str) -> Expr {
     Expr::func("tsquery", [Expr::value(Value::Text(query_text.to_string()))])
+}
+
+/// `GROUP_CONCAT(expr)` — MySQL's string-aggregation function.
+///
+/// MySQL-specific, behind the `mysql` feature; the PostgreSQL equivalent is
+/// [`string_aggregation`].
+#[cfg(feature = "mysql")]
+pub fn group_concat(arg: impl Into<Expr>) -> Expr {
+    Expr::func("GROUP_CONCAT", [arg.into()])
 }

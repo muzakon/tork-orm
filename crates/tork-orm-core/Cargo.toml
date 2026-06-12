@@ -17,6 +17,7 @@ rusqlite = { workspace = true, optional = true }
 tokio-postgres = { workspace = true, optional = true }
 deadpool-postgres = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
+mysql_async = { workspace = true, optional = true }
 tork-core = { workspace = true, optional = true }
 inventory = { workspace = true, optional = true }
 
@@ -28,8 +29,9 @@ sqlite = ["dep:rusqlite"]
 # PostgreSQL dialect (SQL/DDL generation) is always available; this feature adds
 # the network driver needed to connect to a server.
 postgres = ["dep:tokio-postgres", "dep:deadpool-postgres", "dep:bytes"]
-# Reserved for a future backend.
-mysql = []
+# MySQL backend: the live mysql_async driver and pool. Like `postgres`, the
+# dialect is always available; this feature adds the network driver.
+mysql = ["dep:mysql_async"]
 # Schema migrations (the migration engine) and `migrate generate`. The link-time
 # model registry that generate enumerates pulls in `inventory`; generated
 # migration files get revision ids from `uuid`.

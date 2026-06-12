@@ -117,7 +117,7 @@ fn with_cte_into_union() {
         order_by: vec![],
         limit: None,
         offset: None,
-        for_update: false,
+        lock: None,
     };
     let outer = SelectStatement {
         with: Some(tork_orm_core::WithClause {
@@ -163,7 +163,7 @@ fn with_recursive_cte() {
         order_by: vec![],
         limit: None,
         offset: None,
-        for_update: false,
+        lock: None,
     };
     let outer = SelectStatement {
         with: Some(tork_orm_core::WithClause {

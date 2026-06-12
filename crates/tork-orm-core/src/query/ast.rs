@@ -159,8 +159,58 @@ pub struct SelectStatement {
     pub offset: Option<u64>,
     /// Whether to return distinct rows.
     pub distinct: bool,
-    /// Whether to append `FOR UPDATE` (row-level locking).
-    pub for_update: bool,
+    /// `DISTINCT ON (...)` expressions (PostgreSQL). Empty means no `DISTINCT ON`.
+    pub distinct_on: Vec<Expr>,
+    /// An optional row-level locking clause (`FOR UPDATE`/`FOR SHARE`).
+    pub lock: Option<LockClause>,
+}
+
+/// The strength of a row-level lock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockStrength {
+    /// `FOR UPDATE` — blocks other writers and lockers of the rows.
+    Update,
+    /// `FOR SHARE` — allows concurrent readers but blocks writers.
+    Share,
+}
+
+/// How a locking read behaves when a target row is already locked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockWait {
+    /// Wait for the lock to be released (the default).
+    Wait,
+    /// Fail immediately rather than wait (`NOWAIT`).
+    NoWait,
+    /// Skip rows that are already locked (`SKIP LOCKED`).
+    SkipLocked,
+}
+
+/// A row-level locking clause: a strength plus optional `OF` tables and a
+/// wait policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockClause {
+    /// `FOR UPDATE` or `FOR SHARE`.
+    pub strength: LockStrength,
+    /// What to do when a row is already locked.
+    pub wait: LockWait,
+    /// Tables named in an `OF ...` restriction; empty locks every table.
+    pub of: Vec<&'static str>,
+}
+
+impl LockClause {
+    /// A plain `FOR <strength>` with no `OF` and the default wait policy.
+    pub fn new(strength: LockStrength) -> Self {
+        Self { strength, wait: LockWait::Wait, of: Vec::new() }
+    }
+
+    /// Returns `true` if the clause uses any feature beyond a bare `FOR UPDATE`
+    /// (a share lock, a wait policy, or an `OF` restriction). These require
+    /// dialect support; a bare `FOR UPDATE` works everywhere with row locking.
+    pub fn uses_modifiers(&self) -> bool {
+        self.strength != LockStrength::Update
+            || self.wait != LockWait::Wait
+            || !self.of.is_empty()
+    }
 }
 
 /// A `UNION` or `UNION ALL` combining two or more `SELECT` statements.
@@ -182,8 +232,8 @@ pub struct UnionStatement {
     pub limit: Option<u64>,
     /// Optional row offset applied to the combined result.
     pub offset: Option<u64>,
-    /// Whether to append `FOR UPDATE`.
-    pub for_update: bool,
+    /// An optional row-level locking clause applied to the combined result.
+    pub lock: Option<LockClause>,
 }
 
 impl SelectStatement {
@@ -201,7 +251,8 @@ impl SelectStatement {
             limit: None,
             offset: None,
             distinct: false,
-            for_update: false,
+            distinct_on: Vec::new(),
+            lock: None,
         }
     }
 }

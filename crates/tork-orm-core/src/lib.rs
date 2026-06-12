@@ -28,6 +28,7 @@ pub mod registry;
 mod bridge;
 
 mod database;
+mod enums;
 mod error;
 mod executor;
 mod index;
@@ -40,6 +41,7 @@ mod value;
 pub use database::Database;
 pub use transaction::{IsolationLevel, Transaction, TransactionBuilder};
 pub use dialect::SqlType;
+pub use enums::DbEnum;
 pub use error::{ErrorKind, OrmError, Result};
 pub use executor::Executor;
 pub use index::{IndexColumn, IndexDef, NullsOrder};
@@ -47,7 +49,7 @@ pub use index::{IndexColumn, IndexDef, NullsOrder};
 pub use registry::{registered_models, ModelSchemaEntry, TableSchema};
 pub use model::{ColumnDef, ColumnDefault, ForeignKeyDef, FromRow, Model, ModelHooks};
 pub use preload::{Preloaded, Preloader};
-pub use query::ast::{Cte, CteQuery, Join, JoinKind, OrderItem, SelectItem, SelectStatement, UnionStatement, WithClause};
+pub use query::ast::{Cte, CteQuery, Join, JoinKind, LockClause, LockStrength, LockWait, OrderItem, SelectItem, SelectStatement, UnionStatement, WithClause};
 pub use query::UnionQuery;
 pub use query::column::{Column, IntoAssignExpr, IntoSqlValue, Numeric};
 pub use query::expr::{
@@ -68,6 +70,8 @@ pub use query::func::{
     repeat, reverse, right, split_part, string_aggregation, to_char, to_tsquery, to_tsvector,
     to_tsvector_simple, ts_headline, ts_rank, ts_rank_cd, tsquery,
 };
+#[cfg(feature = "mysql")]
+pub use query::func::group_concat;
 pub use query::projection::{ExprTuple, IntoExpr, IntoSelectItem, Projection};
 pub use query::write::{Assignment, DeleteStatement, InsertStatement, OnConflict, UpdateStatement};
 pub use query::{Page, QuerySet};

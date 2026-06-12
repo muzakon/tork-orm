@@ -666,6 +666,21 @@ impl Column {
         self
     }
 
+    /// Sets the type to an enum constrained to `variants`.
+    ///
+    /// Rendered as a native `ENUM(...)` on MySQL and as a text column with a
+    /// `CHECK (... IN (...))` constraint elsewhere. Both arguments are `'static`,
+    /// so the usual call passes string literals:
+    /// `Column::new("status").enum_type("status", &["active", "inactive"])`.
+    pub fn enum_type(
+        mut self,
+        name: &'static str,
+        variants: &'static [&'static str],
+    ) -> Self {
+        self.spec.ty = SqlType::Enum { name, variants };
+        self
+    }
+
     /// Marks the column `NOT NULL`.
     pub fn not_null(mut self) -> Self {
         self.spec.nullable = false;

@@ -611,3 +611,164 @@ async fn create_trigger_fires_on_insert() {
     let rows = db.fetch_all("SELECT name_upper FROM pg_trig".into(), vec![]).await.unwrap();
     assert_eq!(rows[0].get::<String>("name_upper").unwrap(), "HELLO");
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, DbEnum)]
+enum AccountStatus {
+    Active,
+    Inactive,
+    #[db_enum(rename = "on_hold")]
+    OnHold,
+}
+
+#[derive(Debug, Clone, Model, PartialEq)]
+#[table(name = "pg_enum_accounts")]
+struct EnumAccount {
+    #[field(primary_key, auto)]
+    id: i64,
+    #[field(varchar(length = 50))]
+    name: String,
+    #[field(db_enum)]
+    status: AccountStatus,
+    #[field(db_enum)]
+    tier: Option<AccountStatus>,
+}
+
+#[tokio::test]
+async fn enum_round_trips_and_check_rejects_unknown() {
+    let db = connect().await;
+    reset(
+        &db,
+        "DROP TABLE IF EXISTS pg_enum_accounts",
+        "CREATE TABLE pg_enum_accounts (\
+            id BIGSERIAL PRIMARY KEY, \
+            name VARCHAR(50) NOT NULL, \
+            status VARCHAR(255) NOT NULL CHECK (status IN ('active', 'inactive', 'on_hold')), \
+            tier VARCHAR(255) CHECK (tier IN ('active', 'inactive', 'on_hold')))",
+    )
+    .await;
+
+    let stored = EnumAccount::create(
+        &db,
+        &EnumAccount {
+            id: 0,
+            name: "alice".into(),
+            status: AccountStatus::OnHold,
+            tier: Some(AccountStatus::Active),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(stored.status, AccountStatus::OnHold);
+    assert_eq!(stored.tier, Some(AccountStatus::Active));
+
+    EnumAccount::create(
+        &db,
+        &EnumAccount { id: 0, name: "bob".into(), status: AccountStatus::Active, tier: None },
+    )
+    .await
+    .unwrap();
+
+    let actives = EnumAccount::query()
+        .filter(EnumAccount::status.eq(AccountStatus::Active))
+        .all(&db)
+        .await
+        .unwrap();
+    assert_eq!(actives.len(), 1);
+    assert_eq!(actives[0].name, "bob");
+    assert_eq!(actives[0].tier, None);
+
+    // The CHECK constraint rejects a value outside the declared set.
+    let bad = db
+        .execute(
+            "INSERT INTO pg_enum_accounts (name, status) VALUES ('mallory', 'deleted')".into(),
+            vec![],
+        )
+        .await;
+    assert!(bad.is_err(), "CHECK should reject an unknown enum value");
+}
+
+/// Serializes the tests that share the `pg_items` table.
+static ITEMS_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[derive(Debug, Clone, Model, PartialEq)]
+#[table(name = "pg_items")]
+struct Item {
+    #[field(primary_key, auto)]
+    id: i64,
+    #[field(varchar(length = 50))]
+    category: String,
+    price: i64,
+}
+
+async fn item_db() -> Database {
+    let db = connect().await;
+    reset(
+        &db,
+        "DROP TABLE IF EXISTS pg_items",
+        "CREATE TABLE pg_items (id BIGSERIAL PRIMARY KEY, category VARCHAR(50) NOT NULL, price BIGINT NOT NULL)",
+    )
+    .await;
+    for (category, price) in
+        [("books", 10), ("books", 30), ("toys", 20), ("toys", 5), ("toys", 40)]
+    {
+        db.execute(
+            "INSERT INTO pg_items (category, price) VALUES ($1, $2)".into(),
+            vec![Value::Text(category.into()), Value::Int(price)],
+        )
+        .await
+        .unwrap();
+    }
+    db
+}
+
+#[tokio::test]
+async fn distinct_on_keeps_the_top_row_per_group() {
+    let _guard = ITEMS_LOCK.lock().await;
+    let db = item_db().await;
+    // The cheapest item in each category: DISTINCT ON (category) ORDER BY category, price.
+    let rows = Item::query()
+        .distinct_on((Item::category,))
+        .order_by(Item::category.asc())
+        .order_by(Item::price.asc())
+        .all(&db)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].category, "books");
+    assert_eq!(rows[0].price, 10);
+    assert_eq!(rows[1].category, "toys");
+    assert_eq!(rows[1].price, 5);
+}
+
+#[tokio::test]
+async fn keyset_pagination_walks_pages() {
+    let _guard = ITEMS_LOCK.lock().await;
+    let db = item_db().await;
+    let page1 = Item::query().order_by(Item::id.asc()).limit(2).all(&db).await.unwrap();
+    assert_eq!(page1.iter().map(|i| i.id).collect::<Vec<_>>(), vec![1, 2]);
+
+    let cursor = vec![page1.last().unwrap().id.to_value()];
+    let page2 = Item::query()
+        .order_by(Item::id.asc())
+        .keyset_after(cursor)
+        .limit(2)
+        .all(&db)
+        .await
+        .unwrap();
+    assert_eq!(page2.iter().map(|i| i.id).collect::<Vec<_>>(), vec![3, 4]);
+}
+
+#[tokio::test]
+async fn for_update_skip_locked_runs() {
+    let _guard = ITEMS_LOCK.lock().await;
+    let db = item_db().await;
+    // SKIP LOCKED is a no-op here (nothing else holds a lock) but must execute.
+    let rows = Item::query()
+        .filter(Item::category.eq("toys"))
+        .for_update()
+        .skip_locked()
+        .all(&db)
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 3);
+}

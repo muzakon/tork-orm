@@ -465,7 +465,7 @@ fn for_update_appears_in_rendered_sql() {
         .filter(User::is_active.eq(true))
         .for_update()
         .into_statement();
-    assert!(stmt.for_update);
+    assert!(stmt.lock.is_some());
 
     let dialect = tork_orm_core::dialect::SqliteDialect::new();
     let (sql, _) = tork_orm_core::dialect::render_select(&dialect, &stmt);

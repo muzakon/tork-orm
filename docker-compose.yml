@@ -1,10 +1,12 @@
-# Local PostgreSQL for the ORM's live integration tests.
+# Local databases for the ORM's live integration tests.
 #
 #   docker compose up -d
 #   cargo test -p tork-orm --features postgres --test postgres_live
+#   cargo test -p tork-orm --features mysql    --test mysql_live
 #
-# The host port is 55432 (not the default 5432) to avoid clashing with any other
-# local PostgreSQL. Tests default to the URL below; override with TEST_DATABASE_URL.
+# Host ports are non-default (55432, 3307) to avoid clashing with any local
+# servers. Tests default to the URLs below; override with TEST_DATABASE_URL /
+# TEST_MYSQL_URL.
 services:
   postgres:
     image: postgres:16
@@ -21,3 +23,23 @@ services:
       retries: 15
     tmpfs:
       - /var/lib/postgresql/data
+
+  mysql:
+    image: mysql:8.0
+    # Use the classic auth plugin so the test user authenticates over a plaintext
+    # (NoTls) connection without an RSA/SSL handshake.
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_USER: tork
+      MYSQL_PASSWORD: tork
+      MYSQL_DATABASE: tork_test
+    ports:
+      - "3307:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "tork", "-ptork"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+    tmpfs:
+      - /var/lib/mysql

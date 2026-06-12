@@ -158,7 +158,7 @@ pub mod prelude {
     };
     pub use crate::{
         Assignment, BindValue, BoxFuture, Column,
-        ColumnDef, ColumnDefault, Cte, CteQuery, Database, ErrorKind, Executor, Expr, ExprOver,
+        ColumnDef, ColumnDefault, Cte, CteQuery, Database, DbEnum, ErrorKind, Executor, Expr, ExprOver,
         ForeignKeyDef, FromRow, FromValue,
         IndexColumn, IndexDef, IsolationLevel, Json, Model, ModelHooks, OrderItem, OrmError, Preloaded, QuerySet,
         Relation, RelationKind, Result, Row, SqlType, Transaction, TransactionBuilder, UnionStatement, Value,

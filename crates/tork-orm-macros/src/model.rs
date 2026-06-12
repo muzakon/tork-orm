@@ -374,6 +374,9 @@ struct FieldArgs {
     /// A client-side default: a Rust expression applied to an unset field before
     /// insert. The field is still written.
     default_with: Option<syn::Expr>,
+    /// The field's type implements [`DbEnum`]; take its column type (a native
+    /// `ENUM`/text + `CHECK`) from the type rather than mapping structurally.
+    db_enum: bool,
 }
 
 impl Parse for FieldArgs {
@@ -386,6 +389,7 @@ impl Parse for FieldArgs {
                 "primary_key" => args.primary_key = true,
                 "auto" => args.auto = true,
                 "unique" => args.unique = true,
+                "db_enum" => args.db_enum = true,
                 "index" => {
                     // Bare `index` enables a single-column index; `index = false`
                     // (or `= true`) toggles a foreign key's automatic index.
@@ -570,9 +574,21 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             }
         }
 
-        let sql_type = match args.varchar_len {
-            Some(length) => quote!(#krate::SqlType::Varchar(#length)),
-            None => sql_type_for(base_ty),
+        // `db_enum` takes the column type from the field type's `DbEnum` impl, which
+        // carries the variant list the DDL renderer constrains against.
+        let sql_type = if args.db_enum {
+            if args.varchar_len.is_some() {
+                return Err(syn::Error::new_spanned(
+                    field_ty,
+                    "`db_enum` and `varchar(...)` cannot both be set on one field",
+                ));
+            }
+            quote!(<#base_ty as #krate::DbEnum>::SQL_TYPE)
+        } else {
+            match args.varchar_len {
+                Some(length) => quote!(#krate::SqlType::Varchar(#length)),
+                None => sql_type_for(base_ty),
+            }
         };
 
         let foreign_key = match &args.foreign_key {

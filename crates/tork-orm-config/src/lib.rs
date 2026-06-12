@@ -32,6 +32,8 @@ pub enum ConfigDialect {
     Sqlite,
     /// PostgreSQL.
     Postgres,
+    /// MySQL (and MariaDB).
+    Mysql,
 }
 
 impl ConfigDialect {
@@ -40,6 +42,7 @@ impl ConfigDialect {
         match value.trim().to_ascii_lowercase().as_str() {
             "sqlite" => Some(Self::Sqlite),
             "postgres" | "postgresql" => Some(Self::Postgres),
+            "mysql" | "mariadb" => Some(Self::Mysql),
             _ => None,
         }
     }
@@ -49,6 +52,7 @@ impl ConfigDialect {
         match self {
             Self::Sqlite => "sqlite",
             Self::Postgres => "postgres",
+            Self::Mysql => "mysql",
         }
     }
 
@@ -72,8 +76,10 @@ impl ConfigDialect {
     }
 
     /// Whether the dialect has a native JSON column type.
+    ///
+    /// Both PostgreSQL (`jsonb`) and MySQL (`json`) do; SQLite does not.
     pub fn supports_json(self) -> bool {
-        matches!(self, Self::Postgres)
+        matches!(self, Self::Postgres | Self::Mysql)
     }
 
     /// Whether the dialect has a native UUID column type.

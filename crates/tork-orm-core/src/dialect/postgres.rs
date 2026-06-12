@@ -63,6 +63,14 @@ impl Dialect for PostgresDialect {
         true
     }
 
+    fn supports_distinct_on(&self) -> bool {
+        true
+    }
+
+    fn supports_lock_modifiers(&self) -> bool {
+        true
+    }
+
     fn map_sql_type(&self, ty: SqlType, out: &mut String) {
         match ty {
             SqlType::Boolean => out.push_str("BOOLEAN"),
@@ -83,6 +91,9 @@ impl Dialect for PostgresDialect {
                 self.map_sql_type(*inner, out);
                 out.push_str("[]");
             }
+            // Portable enum: a text column constrained by a CHECK appended by the DDL
+            // renderer (rather than a native `CREATE TYPE`).
+            SqlType::Enum { .. } => out.push_str("VARCHAR(255)"),
         }
     }
 

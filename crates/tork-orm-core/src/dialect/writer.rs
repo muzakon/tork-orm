@@ -5,8 +5,11 @@
 //! to a [`Dialect`]. The query layer renders the AST through it, so all dialects
 //! share one rendering walk and differ only in their primitives.
 
-use crate::dialect::Dialect;
-use crate::query::ast::{CteQuery, JoinKind, SelectItem, SelectStatement, UnionStatement, WithClause};
+use crate::dialect::{Dialect, DialectKind};
+use crate::query::ast::{
+    CteQuery, JoinKind, LockClause, LockStrength, LockWait, SelectItem, SelectStatement,
+    UnionStatement, WithClause,
+};
 use crate::query::expr::{Expr, WindowBound};
 use crate::query::write::{DeleteStatement, InsertStatement, OnConflict, UpdateStatement};
 use crate::value::Value;
@@ -113,6 +116,15 @@ impl<'a> QueryWriter<'a> {
             Expr::Column { table, column } => self.push_qualified(table, column),
             Expr::Value(value) => self.push_bind(value.clone()),
             Expr::Binary { left, op: BinaryOp::ILike, right } => self.write_ilike(left, right),
+            // JSON access/containment render differently per dialect (PostgreSQL
+            // operators vs MySQL JSON-path / JSON_CONTAINS).
+            Expr::Binary { left, op: BinaryOp::JsonGet, right } => {
+                self.write_json_get(left, right, false)
+            }
+            Expr::Binary { left, op: BinaryOp::JsonGetText, right } => {
+                self.write_json_get(left, right, true)
+            }
+            Expr::Binary { left, op: BinaryOp::Contains, right } => self.write_contains(left, right),
             Expr::Binary { left, op, right } => {
                 self.write_expr(left);
                 self.sql.push(' ');
@@ -141,17 +153,42 @@ impl<'a> QueryWriter<'a> {
             Expr::Aggregate { func, args, filter } => {
                 self.push_sql(func.as_sql());
                 self.sql.push('(');
-                for (i, arg) in args.iter().enumerate() {
-                    if i != 0 {
-                        self.push_sql(", ");
+                match filter {
+                    // MySQL has no `FILTER (WHERE ...)`; emulate as
+                    // `func(CASE WHEN cond THEN arg END)`.
+                    Some(cond) if !self.dialect.supports_filter_clause() => {
+                        if args.is_empty() {
+                            self.push_sql("CASE WHEN ");
+                            self.write_expr(cond);
+                            self.push_sql(" THEN 1 END");
+                        } else {
+                            for (i, arg) in args.iter().enumerate() {
+                                if i != 0 {
+                                    self.push_sql(", ");
+                                }
+                                self.push_sql("CASE WHEN ");
+                                self.write_expr(cond);
+                                self.push_sql(" THEN ");
+                                self.write_expr(arg);
+                                self.push_sql(" END");
+                            }
+                        }
+                        self.sql.push(')');
                     }
-                    self.write_expr(arg);
-                }
-                self.sql.push(')');
-                if let Some(filter_expr) = filter {
-                    self.push_sql(" FILTER (WHERE ");
-                    self.write_expr(filter_expr);
-                    self.sql.push(')');
+                    _ => {
+                        for (i, arg) in args.iter().enumerate() {
+                            if i != 0 {
+                                self.push_sql(", ");
+                            }
+                            self.write_expr(arg);
+                        }
+                        self.sql.push(')');
+                        if let Some(filter_expr) = filter {
+                            self.push_sql(" FILTER (WHERE ");
+                            self.write_expr(filter_expr);
+                            self.sql.push(')');
+                        }
+                    }
                 }
             }
             Expr::Func { name, args } => {
@@ -210,10 +247,17 @@ impl<'a> QueryWriter<'a> {
                 self.sql.push(')');
             }
             Expr::Excluded(column) => {
-                // `EXCLUDED` is a keyword pseudo-table, left unquoted; the column is
-                // quoted normally. Accepted by PostgreSQL and SQLite (≥ 3.24).
-                self.push_sql("EXCLUDED.");
-                self.push_identifier(column);
+                if self.dialect.kind() == DialectKind::Mysql {
+                    // MySQL refers to the would-be-inserted row via `VALUES(col)`.
+                    self.push_sql("VALUES(");
+                    self.push_identifier(column);
+                    self.sql.push(')');
+                } else {
+                    // `EXCLUDED` is a keyword pseudo-table, left unquoted; the column
+                    // is quoted normally. Accepted by PostgreSQL and SQLite (≥ 3.24).
+                    self.push_sql("EXCLUDED.");
+                    self.push_identifier(column);
+                }
             }
             Expr::Extract { field, source } => {
                 self.push_sql("EXTRACT(");
@@ -337,6 +381,41 @@ impl<'a> QueryWriter<'a> {
         self.sql.push(')');
     }
 
+    /// Renders a JSON field access (`->` / `->>`).
+    ///
+    /// When the key is a text literal it is inlined as a dialect-appropriate path:
+    /// PostgreSQL uses the bare key (`-> 'k'`), MySQL a JSON path (`-> '$.k'`).
+    fn write_json_get(&mut self, left: &Expr, right: &Expr, as_text: bool) {
+        self.write_expr(left);
+        self.push_sql(if as_text { " ->> " } else { " -> " });
+        if let Expr::Value(Value::Text(key)) = right {
+            let path = if self.dialect.kind() == DialectKind::Mysql {
+                format!("$.{key}")
+            } else {
+                key.clone()
+            };
+            quote_string_literal(&path, &mut self.sql);
+        } else {
+            self.write_expr(right);
+        }
+    }
+
+    /// Renders JSON containment: PostgreSQL `left @> right`, MySQL
+    /// `JSON_CONTAINS(left, right)`.
+    fn write_contains(&mut self, left: &Expr, right: &Expr) {
+        if self.dialect.kind() == DialectKind::Mysql {
+            self.push_sql("JSON_CONTAINS(");
+            self.write_expr(left);
+            self.push_sql(", ");
+            self.write_expr(right);
+            self.sql.push(')');
+        } else {
+            self.write_expr(left);
+            self.push_sql(" @> ");
+            self.write_expr(right);
+        }
+    }
+
     /// Renders an `AND`/`OR` group, parenthesizing when it joins more than one item.
     fn write_logical(&mut self, op: crate::query::expr::LogicalOp, items: &[Expr]) {
         use crate::query::expr::LogicalOp;
@@ -403,7 +482,16 @@ impl<'a> QueryWriter<'a> {
             self.write_with_clause(with);
         }
         self.push_sql("SELECT ");
-        if statement.distinct {
+        if !statement.distinct_on.is_empty() {
+            self.push_sql("DISTINCT ON (");
+            for (index, expr) in statement.distinct_on.iter().enumerate() {
+                if index != 0 {
+                    self.push_sql(", ");
+                }
+                self.write_expr(expr);
+            }
+            self.push_sql(") ");
+        } else if statement.distinct {
             self.push_sql("DISTINCT ");
         }
         for (index, item) in statement.projection.iter().enumerate() {
@@ -468,8 +556,32 @@ impl<'a> QueryWriter<'a> {
             self.push_sql(" OFFSET ");
             self.push_sql(&offset.to_string());
         }
-        if statement.for_update {
-            self.push_sql(" FOR UPDATE");
+        self.write_lock(statement.lock.as_ref());
+    }
+
+    /// Renders a row-level locking clause (`FOR UPDATE`/`FOR SHARE` with an
+    /// optional `OF` list and wait policy).
+    fn write_lock(&mut self, lock: Option<&LockClause>) {
+        let Some(lock) = lock else {
+            return;
+        };
+        self.push_sql(match lock.strength {
+            LockStrength::Update => " FOR UPDATE",
+            LockStrength::Share => " FOR SHARE",
+        });
+        if !lock.of.is_empty() {
+            self.push_sql(" OF ");
+            for (index, table) in lock.of.iter().enumerate() {
+                if index != 0 {
+                    self.push_sql(", ");
+                }
+                self.push_identifier(table);
+            }
+        }
+        match lock.wait {
+            LockWait::Wait => {}
+            LockWait::NoWait => self.push_sql(" NOWAIT"),
+            LockWait::SkipLocked => self.push_sql(" SKIP LOCKED"),
         }
     }
 
@@ -504,9 +616,7 @@ impl<'a> QueryWriter<'a> {
             self.push_sql(" OFFSET ");
             self.push_sql(&offset.to_string());
         }
-        if statement.for_update {
-            self.push_sql(" FOR UPDATE");
-        }
+        self.write_lock(statement.lock.as_ref());
     }
 
     /// Renders a `SELECT COUNT(*)` over a statement's table and filters.
@@ -536,7 +646,13 @@ impl<'a> QueryWriter<'a> {
 
     /// Renders an `INSERT` statement.
     pub fn write_insert(&mut self, statement: &InsertStatement) {
-        self.push_sql("INSERT INTO ");
+        let is_mysql = self.dialect.kind() == DialectKind::Mysql;
+        // MySQL spells "skip on conflict" as `INSERT IGNORE`.
+        if is_mysql && matches!(statement.on_conflict, OnConflict::DoNothing { .. }) {
+            self.push_sql("INSERT IGNORE INTO ");
+        } else {
+            self.push_sql("INSERT INTO ");
+        }
         self.push_identifier(statement.table);
         self.push_sql(" (");
         for (index, column) in statement.columns.iter().enumerate() {
@@ -562,9 +678,15 @@ impl<'a> QueryWriter<'a> {
         match &statement.on_conflict {
             OnConflict::None => {}
             OnConflict::Update { constraint, updates } => {
-                self.push_sql(" ON CONFLICT (");
-                self.render_conflict_target(constraint);
-                self.push_sql(") DO UPDATE SET ");
+                if is_mysql {
+                    // MySQL has no conflict target; `EXCLUDED.col` renders as
+                    // `VALUES(col)` (handled in `write_expr`).
+                    self.push_sql(" ON DUPLICATE KEY UPDATE ");
+                } else {
+                    self.push_sql(" ON CONFLICT (");
+                    self.render_conflict_target(constraint);
+                    self.push_sql(") DO UPDATE SET ");
+                }
                 for (index, assignment) in updates.iter().enumerate() {
                     if index != 0 {
                         self.push_sql(", ");
@@ -575,13 +697,17 @@ impl<'a> QueryWriter<'a> {
                 }
             }
             OnConflict::DoNothing { constraint } => {
-                self.push_sql(" ON CONFLICT ");
-                if !constraint.is_empty() {
-                    self.sql.push('(');
-                    self.render_conflict_target(constraint);
-                    self.push_sql(") ");
+                if is_mysql {
+                    // Handled by the `INSERT IGNORE` prefix; nothing to append.
+                } else {
+                    self.push_sql(" ON CONFLICT ");
+                    if !constraint.is_empty() {
+                        self.sql.push('(');
+                        self.render_conflict_target(constraint);
+                        self.push_sql(") ");
+                    }
+                    self.push_sql("DO NOTHING");
                 }
-                self.push_sql("DO NOTHING");
             }
         }
         if !statement.returning.is_empty() {

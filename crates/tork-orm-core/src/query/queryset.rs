@@ -7,14 +7,21 @@
 
 use std::marker::PhantomData;
 
-use crate::dialect::{render_count, render_delete, render_exists, render_select, render_update};
+use crate::dialect::{
+    render_count, render_delete, render_exists, render_select, render_update, Dialect,
+};
 use crate::error::OrmError;
 use crate::executor::Executor;
 use crate::model::{FromRow, Model};
-use crate::query::ast::{Cte, CteQuery, JoinKind, OrderItem, SelectItem, SelectStatement, WithClause};
+use crate::query::ast::{
+    Cte, CteQuery, JoinKind, LockClause, LockStrength, LockWait, OrderItem, SelectItem,
+    SelectStatement, UnionStatement, WithClause,
+};
 use crate::query::column::Column;
 use crate::query::expr::{BinaryOp, Expr};
+use crate::query::projection::ExprTuple;
 use crate::query::write::{Assignment, DeleteStatement, UpdateStatement};
+use crate::value::Value;
 
 /// A typed query over a model `M`.
 ///
@@ -267,6 +274,16 @@ impl<M: Model> QuerySet<M> {
         self
     }
 
+    /// Keeps only the first row of each group of the given expressions
+    /// (`DISTINCT ON (...)`), ordered by the query's `ORDER BY`.
+    ///
+    /// PostgreSQL only; using it on another backend is rejected at the terminal
+    /// with a clear error.
+    pub fn distinct_on<G: ExprTuple>(mut self, group: G) -> Self {
+        self.statement.distinct_on = group.into_exprs();
+        self
+    }
+
     /// Ensures the query returns zero rows by adding a never-true filter
     /// (`0 = 1`). Useful for composing with `union` when you need an empty
     /// branch, or as a base that only produces rows once filters are applied.
@@ -282,10 +299,76 @@ impl<M: Model> QuerySet<M> {
     /// Locks the selected rows with `FOR UPDATE` so no other transaction can
     /// modify or lock them until the current transaction commits.
     ///
-    /// Only supported on backends with row-level locking (PostgreSQL, MySQL,
-    /// SQLite 3.54+). Has no effect on read-only connections.
+    /// A bare `FOR UPDATE` works on every backend with row-level locking
+    /// (PostgreSQL, MySQL, SQLite 3.54+). The modifiers below
+    /// ([`for_share`](Self::for_share), [`skip_locked`](Self::skip_locked),
+    /// [`nowait`](Self::nowait), [`lock_of`](Self::lock_of)) require PostgreSQL or
+    /// MySQL and are rejected elsewhere at the terminal.
     pub fn for_update(mut self) -> Self {
-        self.statement.for_update = true;
+        self.statement.lock = Some(LockClause::new(LockStrength::Update));
+        self
+    }
+
+    /// Locks the selected rows with `FOR SHARE` (a shared lock: concurrent reads
+    /// are allowed, writes are blocked).
+    pub fn for_share(mut self) -> Self {
+        self.statement.lock = Some(LockClause::new(LockStrength::Share));
+        self
+    }
+
+    /// Skips rows already locked by another transaction (`SKIP LOCKED`), instead
+    /// of waiting. Implies `FOR UPDATE` when no lock was set yet.
+    pub fn skip_locked(mut self) -> Self {
+        self.lock_mut().wait = LockWait::SkipLocked;
+        self
+    }
+
+    /// Fails immediately rather than waiting when a row is already locked
+    /// (`NOWAIT`). Implies `FOR UPDATE` when no lock was set yet.
+    pub fn nowait(mut self) -> Self {
+        self.lock_mut().wait = LockWait::NoWait;
+        self
+    }
+
+    /// Restricts the lock to rows of the given tables (`OF table, ...`). Implies
+    /// `FOR UPDATE` when no lock was set yet.
+    pub fn lock_of(mut self, tables: &[&'static str]) -> Self {
+        self.lock_mut().of = tables.to_vec();
+        self
+    }
+
+    /// Returns the current lock clause, inserting a default `FOR UPDATE` if none
+    /// was set, so the modifier builders can be used on their own.
+    fn lock_mut(&mut self) -> &mut LockClause {
+        self.statement
+            .lock
+            .get_or_insert_with(|| LockClause::new(LockStrength::Update))
+    }
+
+    /// Keeps only rows that sort strictly after `cursor` under the current
+    /// `ORDER BY` (keyset / "seek" pagination). Pair with `.limit(n)` to fetch
+    /// the next page without the cost of a large `OFFSET`.
+    ///
+    /// `cursor` holds the ordering-key values of the last row of the previous
+    /// page, one per `ORDER BY` term and in the same order. Build them from a
+    /// row with [`BindValue::to_value`](crate::BindValue::to_value).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `cursor` is empty or its length differs from the number of
+    /// `ORDER BY` terms, since the comparison would be ill-defined.
+    pub fn keyset_after(mut self, cursor: Vec<Value>) -> Self {
+        let predicate = keyset_predicate(&self.statement.order_by, &cursor, true);
+        self.statement.filters.push(predicate);
+        self
+    }
+
+    /// Keeps only rows that sort strictly before `cursor` under the current
+    /// `ORDER BY` (keyset pagination, walking backwards). See
+    /// [`keyset_after`](Self::keyset_after) for the cursor shape and panics.
+    pub fn keyset_before(mut self, cursor: Vec<Value>) -> Self {
+        let predicate = keyset_predicate(&self.statement.order_by, &cursor, false);
+        self.statement.filters.push(predicate);
         self
     }
 
@@ -448,6 +531,7 @@ impl<M: Model> QuerySet<M> {
     ///
     /// Only the result type needs naming: `all_as::<UserPostStats>(&db)`.
     pub async fn all_as<T: FromRow>(self, executor: impl Executor) -> crate::Result<Vec<T>> {
+        validate_for_dialect(executor.dialect(), &self.statement)?;
         let (sql, params) = render_select(executor.dialect(), &self.statement);
         let rows = executor.fetch_all(sql, params).await?;
         rows.iter().map(T::from_row).collect()
@@ -456,6 +540,7 @@ impl<M: Model> QuerySet<M> {
     /// Runs the query and returns the first matching row, if any.
     pub async fn first<E: Executor>(mut self, executor: E) -> crate::Result<Option<M>> {
         self.statement.limit = Some(1);
+        validate_for_dialect(executor.dialect(), &self.statement)?;
         let (sql, params) = render_select(executor.dialect(), &self.statement);
         let rows = executor.fetch_all(sql, params).await?;
         match rows.first() {
@@ -474,6 +559,7 @@ impl<M: Model> QuerySet<M> {
     pub async fn one<E: Executor>(mut self, executor: E) -> crate::Result<M> {
         // Fetch two rows so a second match can be detected and reported.
         self.statement.limit = Some(2);
+        validate_for_dialect(executor.dialect(), &self.statement)?;
         let (sql, params) = render_select(executor.dialect(), &self.statement);
         let rows = executor.fetch_all(sql, params).await?;
         match rows.len() {
@@ -519,6 +605,7 @@ impl<M: Model> QuerySet<M> {
     ) -> crate::Result<Option<M>> {
         // Fetch two rows so a second match can be detected.
         self.statement.limit = Some(2);
+        validate_for_dialect(executor.dialect(), &self.statement)?;
         let (sql, params) = render_select(executor.dialect(), &self.statement);
         let rows = executor.fetch_all(sql, params).await?;
         match rows.len() {
@@ -708,6 +795,7 @@ impl<M: Model> QuerySet<M> {
             table: column.table(),
             column: column.name(),
         }];
+        validate_for_dialect(executor.dialect(), &self.statement)?;
         let (sql, params) = render_select(executor.dialect(), &self.statement);
         let rows = executor.fetch_all(sql, params).await?;
         rows.iter().map(|row| row.get::<T>(column.name())).collect()
@@ -823,4 +911,109 @@ impl<M: Model> Default for QuerySet<M> {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Rejects a statement that uses a feature the dialect cannot support before it is
+/// rendered, so the caller gets a clear error rather than invalid SQL.
+///
+/// Currently this checks for `FULL OUTER JOIN` on dialects that lack it (MySQL),
+/// recursing into CTE bodies.
+pub(crate) fn validate_for_dialect(
+    dialect: &dyn Dialect,
+    statement: &SelectStatement,
+) -> crate::Result<()> {
+    if !dialect.supports_full_join()
+        && statement.joins.iter().any(|join| join.kind == JoinKind::Full)
+    {
+        return Err(OrmError::query(format!(
+            "FULL OUTER JOIN is not supported by the `{}` dialect",
+            dialect.name()
+        )));
+    }
+    if !dialect.supports_distinct_on() && !statement.distinct_on.is_empty() {
+        return Err(OrmError::query(format!(
+            "DISTINCT ON is not supported by the `{}` dialect",
+            dialect.name()
+        )));
+    }
+    if !dialect.supports_lock_modifiers()
+        && statement.lock.as_ref().is_some_and(LockClause::uses_modifiers)
+    {
+        return Err(OrmError::query(format!(
+            "FOR SHARE / SKIP LOCKED / NOWAIT / OF is not supported by the `{}` dialect",
+            dialect.name()
+        )));
+    }
+    if let Some(with) = &statement.with {
+        for cte in &with.ctes {
+            match &cte.query {
+                CteQuery::Select(select) => validate_for_dialect(dialect, select)?,
+                CteQuery::Union(union) => validate_union_for_dialect(dialect, union)?,
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Builds the keyset (seek) predicate for an `ORDER BY` and a boundary `cursor`.
+///
+/// For terms `t0..tn` with cursor values `v0..vn` it expands to the standard
+/// lexicographic comparison as an `OR` of `AND` groups, which handles mixed
+/// `ASC`/`DESC` directions that a row-value comparison cannot:
+///
+/// ```text
+/// (t0 > v0)
+///   OR (t0 = v0 AND t1 > v1)
+///   OR (t0 = v0 AND t1 = v1 AND t2 > v2)
+/// ```
+///
+/// Each `>` is flipped to `<` when the term is `DESC`, and again when walking
+/// backwards (`after = false`).
+fn keyset_predicate(order: &[OrderItem], cursor: &[Value], after: bool) -> Expr {
+    assert!(
+        !order.is_empty(),
+        "keyset pagination requires at least one `order_by` term"
+    );
+    assert_eq!(
+        order.len(),
+        cursor.len(),
+        "keyset cursor length ({}) must match the number of `order_by` terms ({})",
+        cursor.len(),
+        order.len(),
+    );
+
+    let mut disjuncts = Vec::with_capacity(order.len());
+    for boundary in 0..order.len() {
+        let mut conjuncts = Vec::with_capacity(boundary + 1);
+        // Earlier keys must be equal to the cursor's values.
+        for prior in 0..boundary {
+            conjuncts.push(Expr::binary(
+                order[prior].expr.clone(),
+                BinaryOp::Eq,
+                Expr::value(cursor[prior].clone()),
+            ));
+        }
+        // The boundary key is strictly greater (or less, depending on direction).
+        let ascending = !order[boundary].descending;
+        let op = if ascending == after { BinaryOp::Gt } else { BinaryOp::Lt };
+        conjuncts.push(Expr::binary(
+            order[boundary].expr.clone(),
+            op,
+            Expr::value(cursor[boundary].clone()),
+        ));
+        disjuncts.push(Expr::all(conjuncts));
+    }
+    Expr::any(disjuncts)
+}
+
+/// Validates every branch of a union (used by CTE bodies and [`UnionQuery`]).
+pub(crate) fn validate_union_for_dialect(
+    dialect: &dyn Dialect,
+    union: &UnionStatement,
+) -> crate::Result<()> {
+    validate_for_dialect(dialect, &union.first)?;
+    for (_, branch) in &union.rest {
+        validate_for_dialect(dialect, branch)?;
+    }
+    Ok(())
 }

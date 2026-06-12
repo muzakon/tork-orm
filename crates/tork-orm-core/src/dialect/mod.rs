@@ -18,6 +18,10 @@ pub mod postgres;
 
 pub use postgres::PostgresDialect;
 
+pub mod mysql;
+
+pub use mysql::MySqlDialect;
+
 pub use writer::{
     QueryWriter, predicate_sql, quote_string_literal, render_count, render_delete, render_exists,
     render_expr, render_insert, render_select, render_union, render_update,
@@ -70,6 +74,18 @@ pub enum SqlType {
     /// A `&'static` reference rather than a `Box` so [`SqlType`] stays `Copy`; the
     /// derive const-promotes the inner type.
     Array(&'static SqlType),
+    /// An enumeration stored as text, constrained to a fixed set of variant strings.
+    ///
+    /// Rendered as a native `ENUM(...)` on MySQL and as `VARCHAR`/`TEXT` plus a
+    /// `CHECK (... IN (...))` constraint elsewhere. Both fields are `&'static` so
+    /// [`SqlType`] stays `Copy`; the [`DbEnum`](crate::DbEnum) derive const-promotes
+    /// the variant list.
+    Enum {
+        /// The enum's name (used as the type name where the backend has one).
+        name: &'static str,
+        /// The allowed stored values, in declaration order.
+        variants: &'static [&'static str],
+    },
 }
 
 /// Generates backend-specific SQL.
@@ -184,6 +200,40 @@ pub trait Dialect: Send + Sync + 'static {
     /// Returns `true` if the backend supports a per-column operator class on an
     /// index.
     fn supports_index_opclass(&self) -> bool {
+        false
+    }
+
+    /// Returns `true` if the backend supports the SQL-standard aggregate
+    /// `FILTER (WHERE ...)` clause.
+    ///
+    /// PostgreSQL and SQLite (3.30+) do; MySQL does not, so the writer emulates it
+    /// with a `CASE` expression there.
+    fn supports_filter_clause(&self) -> bool {
+        true
+    }
+
+    /// Returns `true` if the backend supports `FULL OUTER JOIN`.
+    ///
+    /// MySQL does not; a query using it is rejected with a clear error rather than
+    /// emitting invalid SQL.
+    fn supports_full_join(&self) -> bool {
+        true
+    }
+
+    /// Returns `true` if the backend supports `DISTINCT ON (...)`.
+    ///
+    /// Only PostgreSQL does; a query using it on another backend is rejected with
+    /// a clear error rather than emitting invalid SQL.
+    fn supports_distinct_on(&self) -> bool {
+        false
+    }
+
+    /// Returns `true` if the backend supports row-locking modifiers beyond a bare
+    /// `FOR UPDATE`: `FOR SHARE`, `SKIP LOCKED`, `NOWAIT`, and `OF table`.
+    ///
+    /// PostgreSQL and MySQL (8.0+) do; SQLite does not. A bare `FOR UPDATE` is
+    /// allowed everywhere with row-level locking.
+    fn supports_lock_modifiers(&self) -> bool {
         false
     }
 }

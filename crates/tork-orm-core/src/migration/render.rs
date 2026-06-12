@@ -276,6 +276,22 @@ fn render_column(dialect: &dyn Dialect, column: &ColumnSpec, is_auto_pk: bool, o
         out.push_str(" DEFAULT ");
         render_default(dialect, default, out);
     }
+    // Enum columns are validated by a CHECK on dialects without a native enum type.
+    // MySQL constrains via the `ENUM(...)` type itself, so it needs no CHECK.
+    if let SqlType::Enum { variants, .. } = column.ty {
+        if dialect.kind() != DialectKind::Mysql {
+            out.push_str(" CHECK (");
+            dialect.quote_identifier(&column.name, out);
+            out.push_str(" IN (");
+            for (index, variant) in variants.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                quote_string_literal(variant, out);
+            }
+            out.push_str("))");
+        }
+    }
 }
 
 /// Returns the rendered column type for a dialect as an owned string.

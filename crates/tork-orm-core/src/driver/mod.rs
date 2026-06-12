@@ -28,6 +28,9 @@ pub mod sqlite;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 
+#[cfg(feature = "mysql")]
+pub mod mysql;
+
 /// The outcome of a statement that does not return rows.
 ///
 /// Returned by execute-style calls (`INSERT` / `UPDATE` / `DELETE` and DDL).

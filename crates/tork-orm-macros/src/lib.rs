@@ -8,6 +8,7 @@
 use proc_macro::TokenStream;
 
 mod common;
+mod db_enum;
 mod migration;
 mod model;
 mod query_result;
@@ -68,6 +69,35 @@ pub fn derive_model(item: TokenStream) -> TokenStream {
 #[proc_macro_derive(QueryResult)]
 pub fn derive_query_result(item: TokenStream) -> TokenStream {
     query_result::expand(item)
+}
+
+/// Derives [`DbEnum`] for a unit-only enum stored as text.
+///
+/// Generates the [`DbEnum`] metadata plus `BindValue`/`FromValue`, so the enum can
+/// be a model field (with `#[field(db_enum)]`), a bound parameter, and a value read
+/// back from a row. Variants map to their `snake_case` name by default.
+///
+/// # Attributes
+///
+/// - `#[db_enum(name = "...")]` overrides the enum name (defaults to the type's
+///   `snake_case`)
+/// - `#[db_enum(rename_all = "...")]` sets the whole-enum casing (`snake_case`,
+///   `SCREAMING_SNAKE_CASE`, `kebab-case`, `lowercase`, `UPPERCASE`, `PascalCase`,
+///   `camelCase`)
+/// - `#[db_enum(rename = "...")]` on a variant overrides its stored value
+///
+/// # Example
+///
+/// ```ignore
+/// #[derive(Debug, Clone, Copy, PartialEq, DbEnum)]
+/// pub enum Status {
+///     Active,                                // -> 'active'
+///     #[db_enum(rename = "on_hold")] OnHold, // -> 'on_hold'
+/// }
+/// ```
+#[proc_macro_derive(DbEnum, attributes(db_enum))]
+pub fn derive_db_enum(item: TokenStream) -> TokenStream {
+    db_enum::expand(item)
 }
 
 /// Declares the relations of a model on an `impl` block.

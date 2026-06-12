@@ -46,7 +46,7 @@ impl<M: Model> UnionQuery<M> {
                 order_by: Vec::new(),
                 limit: None,
                 offset: None,
-                for_update: false,
+                lock: None,
             },
             _marker: PhantomData,
         }
@@ -96,6 +96,7 @@ impl<M: Model> UnionQuery<M> {
 
     /// Runs the union and maps each row into an arbitrary [`FromRow`] type.
     pub async fn all_as<T: FromRow>(self, executor: impl Executor) -> crate::Result<Vec<T>> {
+        crate::query::queryset::validate_union_for_dialect(executor.dialect(), &self.statement)?;
         let (sql, params) = render_union(executor.dialect(), &self.statement);
         let rows = executor.fetch_all(sql, params).await?;
         rows.iter().map(T::from_row).collect()
@@ -104,6 +105,7 @@ impl<M: Model> UnionQuery<M> {
     /// Runs the union and returns the first row, if any.
     pub async fn first<E: Executor>(mut self, executor: E) -> crate::Result<Option<M>> {
         self.statement.limit = Some(1);
+        crate::query::queryset::validate_union_for_dialect(executor.dialect(), &self.statement)?;
         let (sql, params) = render_union(executor.dialect(), &self.statement);
         let rows = executor.fetch_all(sql, params).await?;
         match rows.first() {
@@ -115,6 +117,7 @@ impl<M: Model> UnionQuery<M> {
     /// Runs a `COUNT(*)` wrapping the whole union.
     pub async fn count<E: Executor>(self, executor: E) -> crate::Result<i64> {
         // Wrap the union in a derived table: SELECT COUNT(*) FROM (<union>) AS _u
+        crate::query::queryset::validate_union_for_dialect(executor.dialect(), &self.statement)?;
         let (inner_sql, params) = render_union(executor.dialect(), &self.statement);
         let sql = format!("SELECT COUNT(*) FROM ({inner_sql}) AS _u");
         let rows = executor.fetch_all(sql, params).await?;

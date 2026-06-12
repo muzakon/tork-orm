@@ -22,6 +22,8 @@ enum Backend {
     Sqlite(crate::driver::sqlite::SqlitePool),
     #[cfg(feature = "postgres")]
     Postgres(crate::driver::postgres::PostgresPool),
+    #[cfg(feature = "mysql")]
+    Mysql(crate::driver::mysql::MysqlPool),
 }
 
 /// A handle to a database.
@@ -82,6 +84,19 @@ impl Database {
                 "this build cannot connect to PostgreSQL; enable the `postgres` \
                  feature to compile the driver",
             )),
+            #[cfg(feature = "mysql")]
+            "mysql" | "mariadb" => {
+                let pool = crate::driver::mysql::MysqlPool::new(url, max_connections)?;
+                Ok(Self {
+                    backend: Backend::Mysql(pool),
+                    dialect: Arc::new(crate::dialect::MySqlDialect::new()),
+                })
+            }
+            #[cfg(not(feature = "mysql"))]
+            "mysql" | "mariadb" => Err(OrmError::configuration(
+                "this build cannot connect to MySQL; enable the `mysql` feature to \
+                 compile the driver",
+            )),
             other => Err(OrmError::configuration(format!(
                 "no compiled-in backend for url scheme `{other}`"
             ))),
@@ -100,6 +115,8 @@ impl Database {
             Backend::Sqlite(pool) => pool.fetch_all(sql, params).await,
             #[cfg(feature = "postgres")]
             Backend::Postgres(pool) => pool.fetch_all(sql, params).await,
+            #[cfg(feature = "mysql")]
+            Backend::Mysql(pool) => pool.fetch_all(sql, params).await,
         }
     }
 
@@ -114,6 +131,8 @@ impl Database {
             Backend::Sqlite(pool) => pool.execute(sql, params).await,
             #[cfg(feature = "postgres")]
             Backend::Postgres(pool) => pool.execute(sql, params).await,
+            #[cfg(feature = "mysql")]
+            Backend::Mysql(pool) => pool.execute(sql, params).await,
         }
     }
 
@@ -124,6 +143,8 @@ impl Database {
             Backend::Sqlite(pool) => pool.execute_batch(sql).await,
             #[cfg(feature = "postgres")]
             Backend::Postgres(pool) => pool.execute_batch(sql).await,
+            #[cfg(feature = "mysql")]
+            Backend::Mysql(pool) => pool.execute_batch(sql).await,
         }
     }
 
@@ -137,6 +158,8 @@ impl Database {
             Backend::Sqlite(pool) => pool.statement_count(),
             #[cfg(feature = "postgres")]
             Backend::Postgres(pool) => pool.statement_count(),
+            #[cfg(feature = "mysql")]
+            Backend::Mysql(pool) => pool.statement_count(),
         }
     }
 
@@ -147,6 +170,8 @@ impl Database {
             Backend::Sqlite(pool) => pool.close().await,
             #[cfg(feature = "postgres")]
             Backend::Postgres(pool) => pool.close().await,
+            #[cfg(feature = "mysql")]
+            Backend::Mysql(pool) => pool.close().await,
         }
     }
 
@@ -160,6 +185,8 @@ impl Database {
             Backend::Sqlite(pool) => PinnedBackend::Sqlite(pool.acquire_pinned().await?),
             #[cfg(feature = "postgres")]
             Backend::Postgres(pool) => PinnedBackend::Postgres(pool.acquire_pinned().await?),
+            #[cfg(feature = "mysql")]
+            Backend::Mysql(pool) => PinnedBackend::Mysql(pool.acquire_pinned().await?),
         };
         Ok(Pinned {
             backend,
@@ -180,6 +207,8 @@ enum PinnedBackend {
     Sqlite(crate::driver::sqlite::PinnedSqlite),
     #[cfg(feature = "postgres")]
     Postgres(crate::driver::postgres::PinnedPostgres),
+    #[cfg(feature = "mysql")]
+    Mysql(crate::driver::mysql::PinnedMysql),
 }
 
 impl crate::executor::Executor for Pinned {
@@ -193,6 +222,8 @@ impl crate::executor::Executor for Pinned {
             PinnedBackend::Sqlite(pinned) => pinned.fetch_all(sql, params).await,
             #[cfg(feature = "postgres")]
             PinnedBackend::Postgres(pinned) => pinned.fetch_all(sql, params).await,
+            #[cfg(feature = "mysql")]
+            PinnedBackend::Mysql(pinned) => pinned.fetch_all(sql, params).await,
         }
     }
 
@@ -202,6 +233,8 @@ impl crate::executor::Executor for Pinned {
             PinnedBackend::Sqlite(pinned) => pinned.execute(sql, params).await,
             #[cfg(feature = "postgres")]
             PinnedBackend::Postgres(pinned) => pinned.execute(sql, params).await,
+            #[cfg(feature = "mysql")]
+            PinnedBackend::Mysql(pinned) => pinned.execute(sql, params).await,
         }
     }
 }
@@ -214,6 +247,8 @@ impl Pinned {
             PinnedBackend::Sqlite(pinned) => pinned.execute_batch(sql).await,
             #[cfg(feature = "postgres")]
             PinnedBackend::Postgres(pinned) => pinned.execute_batch(sql).await,
+            #[cfg(feature = "mysql")]
+            PinnedBackend::Mysql(pinned) => pinned.execute_batch(sql).await,
         }
     }
 
@@ -226,6 +261,8 @@ impl Pinned {
             PinnedBackend::Sqlite(pinned) => pinned.rollback_now(),
             #[cfg(feature = "postgres")]
             PinnedBackend::Postgres(pinned) => pinned.rollback_now(),
+            #[cfg(feature = "mysql")]
+            PinnedBackend::Mysql(pinned) => pinned.rollback_now(),
         }
     }
 }
