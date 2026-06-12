@@ -55,8 +55,10 @@ pub use query::expr::{
     WindowFrameUnit,
 };
 pub use query::func::{
-    abs, ceil, coalesce, concat, floor, func, greatest, least, length, lower, nullif,
-    position, random_value, replace, round, substr, substr_len, trim, upper,
+    abs, ceil, coalesce, concat, cume_dist, dense_rank, first_value, floor, func, greatest,
+    lag, lag_default, lag_offset, last_value, lead, lead_default, lead_offset, least, length,
+    lower, ntile, nth_value, nullif, percent_rank, position, random_value, rank, replace,
+    round, row_number, substr, substr_len, trim, upper,
 };
 #[cfg(feature = "postgres")]
 pub use query::func::{

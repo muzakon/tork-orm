@@ -120,30 +120,6 @@ pub fn random_value() -> Expr {
     Expr::func("random", [] as [Expr; 0])
 }
 
-/// `regexp_like(column, pattern)` — tests whether the column matches the regex pattern.
-pub fn regex_match(column: impl Into<Expr>, pattern: &str) -> Expr {
-    Expr::func("regexp_like", [column.into(), Expr::value(crate::value::Value::Text(pattern.to_string()))])
-}
-
-/// `regexp_replace(column, pattern, replacement)` — replaces regex matches.
-pub fn regex_replace(column: impl Into<Expr>, pattern: &str, replacement: &str) -> Expr {
-    Expr::func("regexp_replace", [
-        column.into(),
-        Expr::value(crate::value::Value::Text(pattern.to_string())),
-        Expr::value(crate::value::Value::Text(replacement.to_string())),
-    ])
-}
-
-/// `split_part(column, delimiter, field)` — splits on `delimiter` and returns the
-/// `field`-th part (1-based).
-pub fn split_part(column: impl Into<Expr>, delimiter: &str, field: i64) -> Expr {
-    Expr::func("split_part", [
-        column.into(),
-        Expr::value(crate::value::Value::Text(delimiter.to_string())),
-        Expr::value(crate::value::Value::Int(field)),
-    ])
-}
-
 /// `replace(column, from, to)` — replaces all occurrences of `from` with `to`.
 pub fn replace(column: impl Into<Expr>, from: &str, to: &str) -> Expr {
     Expr::func("replace", [
@@ -151,26 +127,6 @@ pub fn replace(column: impl Into<Expr>, from: &str, to: &str) -> Expr {
         Expr::value(crate::value::Value::Text(from.to_string())),
         Expr::value(crate::value::Value::Text(to.to_string())),
     ])
-}
-
-/// `left(column, n)` — returns the first `n` characters.
-pub fn left(column: impl Into<Expr>, n: i64) -> Expr {
-    Expr::func("left", [column.into(), Expr::value(crate::value::Value::Int(n))])
-}
-
-/// `right(column, n)` — returns the last `n` characters.
-pub fn right(column: impl Into<Expr>, n: i64) -> Expr {
-    Expr::func("right", [column.into(), Expr::value(crate::value::Value::Int(n))])
-}
-
-/// `repeat(column, n)` — repeats the string `n` times.
-pub fn repeat(column: impl Into<Expr>, n: i64) -> Expr {
-    Expr::func("repeat", [column.into(), Expr::value(crate::value::Value::Int(n))])
-}
-
-/// `reverse(column)` — reverses the string.
-pub fn reverse(column: impl Into<Expr>) -> Expr {
-    Expr::func("reverse", [column.into()])
 }
 
 /// `position(substring IN column)` — returns the position of the first occurrence.
@@ -181,7 +137,157 @@ pub fn position(substring: &str, column: impl Into<Expr>) -> Expr {
     ])
 }
 
+// ---------------------------------------------------------------------------
+// Window functions — pure functions designed for OVER()
+// ---------------------------------------------------------------------------
+
+/// `ROW_NUMBER()` — assigns a unique sequential integer to each row within a
+/// partition. Typically used with `.over().order_by(...)`.
+pub fn row_number() -> Expr {
+    Expr::func("ROW_NUMBER", [] as [Expr; 0])
+}
+
+/// `RANK()` — ranks rows with gaps: rows with equal values in the `ORDER BY`
+/// get the same rank, and the next rank is skipped.
+pub fn rank() -> Expr {
+    Expr::func("RANK", [] as [Expr; 0])
+}
+
+/// `DENSE_RANK()` — ranks rows without gaps: equal values share a rank, and
+/// the next rank follows immediately.
+pub fn dense_rank() -> Expr {
+    Expr::func("DENSE_RANK", [] as [Expr; 0])
+}
+
+/// `NTILE(n)` — divides rows into `n` buckets as evenly as possible.
+pub fn ntile(n: i64) -> Expr {
+    Expr::func("NTILE", [Expr::value(crate::value::Value::Int(n))])
+}
+
+/// `LAG(expr [, offset [, default]])` — accesses the value from the previous
+/// row within the partition.
+pub fn lag(expr: impl Into<Expr>) -> Expr {
+    Expr::func("LAG", [expr.into()])
+}
+
+/// `LAG(expr, offset)` — accesses the value `offset` rows before the current row.
+pub fn lag_offset(expr: impl Into<Expr>, offset: i64) -> Expr {
+    Expr::func("LAG", [expr.into(), Expr::value(crate::value::Value::Int(offset))])
+}
+
+/// `LAG(expr, offset, default)` — with a fallback when there is no preceding row.
+pub fn lag_default(expr: impl Into<Expr>, offset: i64, default: impl Into<Expr>) -> Expr {
+    Expr::func("LAG", [
+        expr.into(),
+        Expr::value(crate::value::Value::Int(offset)),
+        default.into(),
+    ])
+}
+
+/// `LEAD(expr)` — accesses the value from the next row within the partition.
+pub fn lead(expr: impl Into<Expr>) -> Expr {
+    Expr::func("LEAD", [expr.into()])
+}
+
+/// `LEAD(expr, offset)` — accesses the value `offset` rows after the current row.
+pub fn lead_offset(expr: impl Into<Expr>, offset: i64) -> Expr {
+    Expr::func("LEAD", [expr.into(), Expr::value(crate::value::Value::Int(offset))])
+}
+
+/// `LEAD(expr, offset, default)` — with a fallback when there is no following row.
+pub fn lead_default(expr: impl Into<Expr>, offset: i64, default: impl Into<Expr>) -> Expr {
+    Expr::func("LEAD", [
+        expr.into(),
+        Expr::value(crate::value::Value::Int(offset)),
+        default.into(),
+    ])
+}
+
+/// `FIRST_VALUE(expr)` — returns the value from the first row of the window frame.
+pub fn first_value(expr: impl Into<Expr>) -> Expr {
+    Expr::func("FIRST_VALUE", [expr.into()])
+}
+
+/// `LAST_VALUE(expr)` — returns the value from the last row of the window frame.
+pub fn last_value(expr: impl Into<Expr>) -> Expr {
+    Expr::func("LAST_VALUE", [expr.into()])
+}
+
+/// `NTH_VALUE(expr, n)` — returns the value from the n-th row of the window
+/// frame (1-based).
+pub fn nth_value(expr: impl Into<Expr>, n: i64) -> Expr {
+    Expr::func("NTH_VALUE", [expr.into(), Expr::value(crate::value::Value::Int(n))])
+}
+
+/// `PERCENT_RANK()` — returns the relative rank of the current row: (rank - 1) /
+/// (total rows - 1).
+pub fn percent_rank() -> Expr {
+    Expr::func("PERCENT_RANK", [] as [Expr; 0])
+}
+
+/// `CUME_DIST()` — cumulative distribution: the number of rows preceding or peer
+/// to the current row divided by the total number of rows.
+pub fn cume_dist() -> Expr {
+    Expr::func("CUME_DIST", [] as [Expr; 0])
+}
+
+// ---------------------------------------------------------------------------
+// PostgreSQL-specific functions
+// ---------------------------------------------------------------------------
+
+/// `regexp_like(column, pattern)` — tests whether the column matches the regex pattern.
+#[cfg(feature = "postgres")]
+pub fn regex_match(column: impl Into<Expr>, pattern: &str) -> Expr {
+    Expr::func("regexp_like", [column.into(), Expr::value(crate::value::Value::Text(pattern.to_string()))])
+}
+
+/// `regexp_replace(column, pattern, replacement)` — replaces regex matches.
+#[cfg(feature = "postgres")]
+pub fn regex_replace(column: impl Into<Expr>, pattern: &str, replacement: &str) -> Expr {
+    Expr::func("regexp_replace", [
+        column.into(),
+        Expr::value(crate::value::Value::Text(pattern.to_string())),
+        Expr::value(crate::value::Value::Text(replacement.to_string())),
+    ])
+}
+
+/// `split_part(column, delimiter, field)` — splits on `delimiter` and returns the
+/// `field`-th part (1-based).
+#[cfg(feature = "postgres")]
+pub fn split_part(column: impl Into<Expr>, delimiter: &str, field: i64) -> Expr {
+    Expr::func("split_part", [
+        column.into(),
+        Expr::value(crate::value::Value::Text(delimiter.to_string())),
+        Expr::value(crate::value::Value::Int(field)),
+    ])
+}
+
+/// `left(column, n)` — returns the first `n` characters.
+#[cfg(feature = "postgres")]
+pub fn left(column: impl Into<Expr>, n: i64) -> Expr {
+    Expr::func("left", [column.into(), Expr::value(crate::value::Value::Int(n))])
+}
+
+/// `right(column, n)` — returns the last `n` characters.
+#[cfg(feature = "postgres")]
+pub fn right(column: impl Into<Expr>, n: i64) -> Expr {
+    Expr::func("right", [column.into(), Expr::value(crate::value::Value::Int(n))])
+}
+
+/// `repeat(column, n)` — repeats the string `n` times.
+#[cfg(feature = "postgres")]
+pub fn repeat(column: impl Into<Expr>, n: i64) -> Expr {
+    Expr::func("repeat", [column.into(), Expr::value(crate::value::Value::Int(n))])
+}
+
+/// `reverse(column)` — reverses the string.
+#[cfg(feature = "postgres")]
+pub fn reverse(column: impl Into<Expr>) -> Expr {
+    Expr::func("reverse", [column.into()])
+}
+
 /// `string_agg(column, delimiter)` — concatenates non-null values with a delimiter.
+#[cfg(feature = "postgres")]
 pub fn string_aggregation(column: impl Into<Expr>, delimiter: &str) -> Expr {
     Expr::aggregate(crate::query::expr::AggFunc::StringAggregation, [
         column.into(),
@@ -190,26 +296,31 @@ pub fn string_aggregation(column: impl Into<Expr>, delimiter: &str) -> Expr {
 }
 
 /// `array_agg(column)` — collects values into a PostgreSQL array.
+#[cfg(feature = "postgres")]
 pub fn array_aggregation(column: impl Into<Expr>) -> Expr {
     Expr::aggregate(crate::query::expr::AggFunc::ArrayAggregation, [column.into()])
 }
 
 /// `json_agg(column)` — aggregates values as a JSON array.
+#[cfg(feature = "postgres")]
 pub fn json_aggregation(column: impl Into<Expr>) -> Expr {
     Expr::aggregate(crate::query::expr::AggFunc::JsonAggregation, [column.into()])
 }
 
 /// `jsonb_agg(column)` — aggregates values as a JSONB array.
+#[cfg(feature = "postgres")]
 pub fn jsonb_aggregation(column: impl Into<Expr>) -> Expr {
     Expr::aggregate(crate::query::expr::AggFunc::JsonbAggregation, [column.into()])
 }
 
 /// `bool_and(column)` — true if every non-null value is true.
+#[cfg(feature = "postgres")]
 pub fn bool_and(column: impl Into<Expr>) -> Expr {
     Expr::aggregate(crate::query::expr::AggFunc::BoolAnd, [column.into()])
 }
 
 /// `bool_or(column)` — true if any non-null value is true.
+#[cfg(feature = "postgres")]
 pub fn bool_or(column: impl Into<Expr>) -> Expr {
     Expr::aggregate(crate::query::expr::AggFunc::BoolOr, [column.into()])
 }
