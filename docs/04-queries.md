@@ -290,3 +290,182 @@ let stats = User::query()
 ```
 
 `.having()` without a prior `.group_by()` is valid SQL and filters the implicit single group (equivalent to a `WHERE` on an aggregate).
+
+---
+
+## 10. Outer Joins
+
+`.join()` performs an `INNER JOIN` and drops any left-side rows that have no matching right-side row. `.left_join()` performs a `LEFT JOIN` and keeps every left-side row, filling the right-side columns with `NULL` when no match exists.
+
+```rust
+#[derive(QueryResult)]
+struct UserWithCount {
+    id: i64,
+    username: String,
+    post_count: i64,
+}
+
+// All users, including those with zero posts.
+let rows = User::query()
+    .left_join(User::posts())
+    .select((
+        User::id,
+        User::username,
+        Post::id.count().as_("post_count"),
+    ))
+    .group_by((User::id, User::username))
+    .all_as::<UserWithCount>(&db)
+    .await?;
+// SQL: SELECT ... FROM "users" LEFT JOIN "posts" ON "users"."id" = "posts"."user_id"
+//      GROUP BY "users"."id", "users"."username"
+// A user with no posts appears with post_count = 0 (COUNT returns 0 for NULLs).
+```
+
+Use `.join()` when you only want rows that have at least one related record. Use `.left_join()` when you want all rows regardless of whether a related record exists.
+
+---
+
+## 11. Arithmetic
+
+Numeric columns (`i64`, `i32`, `f64`) expose arithmetic methods that produce an `Expr`. The result can be used in `.select()`, `.filter()`, or `.having()`.
+
+```rust
+// Scale a column in a projection
+#[derive(QueryResult)]
+struct PostViews {
+    id: i64,
+    doubled_views: i64,
+}
+
+let rows = Post::query()
+    .select((
+        Post::id,
+        Post::view_count.mul(2_i64).as_("doubled_views"),
+    ))
+    .all_as::<PostViews>(&db)
+    .await?;
+// SQL: SELECT "posts"."id", "posts"."view_count" * ? AS "doubled_views" FROM "posts"
+
+// All five operators
+let a = Post::view_count.add(10_i64);  // view_count + 10
+let b = Post::view_count.sub(1_i64);   // view_count - 1
+let c = Post::view_count.mul(2_i64);   // view_count * 2
+let d = Post::view_count.div(4_i64);   // view_count / 4
+let e = Post::view_count.rem(7_i64);   // view_count % 7
+```
+
+To combine two columns arithmetically, call `.expr()` to get an `Expr` first and then use the `Expr` arithmetic methods:
+
+```rust
+// Add two columns together (no bound parameter)
+let total = Post::view_count.expr().add(Post::id.expr());
+// SQL fragment: "posts"."view_count" + "posts"."id"
+```
+
+Arithmetic expressions can be chained: `.mul(2).add(Expr::value(Value::Int(1)))` renders `col * ? + ?`.
+
+---
+
+## 12. CASE / WHEN
+
+`Expr::case()` starts a builder that produces a `CASE WHEN ... END` expression. Call `.when(condition, result)` for each branch, optionally `.else_(default)`, and finalize with `.end()`.
+
+```rust
+// Map is_active to a display string
+let status_label = Expr::case()
+    .when(
+        User::is_active.eq(true),
+        Expr::value(Value::Text("active".into())),
+    )
+    .when(
+        User::is_active.eq(false),
+        Expr::value(Value::Text("inactive".into())),
+    )
+    .else_(Expr::value(Value::Text("unknown".into())))
+    .end()
+    .as_("status");
+
+#[derive(QueryResult)]
+struct UserStatus {
+    id: i64,
+    username: String,
+    status: String,
+}
+
+let rows = User::query()
+    .select((User::id, User::username, status_label))
+    .all_as::<UserStatus>(&db)
+    .await?;
+// SQL: SELECT ..., CASE WHEN ... THEN ? WHEN ... THEN ? ELSE ? END AS "status"
+```
+
+When `.else_()` is omitted, `NULL` is returned for rows that match no branch (standard SQL behavior). Branches are evaluated top to bottom and the first match wins.
+
+---
+
+## 13. Ordering Extras
+
+### NULLS FIRST / NULLS LAST
+
+By default, `NULL` placement in `ORDER BY` is database-defined (SQLite puts `NULL` before non-null values when sorting ascending). To make the placement explicit, chain `.nulls_first()` or `.nulls_last()` onto any `OrderItem`:
+
+```rust
+// NULLs sorted last in an ascending column (common production default)
+let users = User::query()
+    .order_by(User::nickname.asc().nulls_last())
+    .all(&db)
+    .await?;
+// SQL: ORDER BY "users"."nickname" ASC NULLS LAST
+
+// NULLs sorted first in a descending column
+let posts = Post::query()
+    .order_by(Post::view_count.desc().nulls_first())
+    .all(&db)
+    .await?;
+// SQL: ORDER BY "posts"."view_count" DESC NULLS FIRST
+```
+
+Without `.nulls_first()` or `.nulls_last()`, no `NULLS` clause is emitted and the database uses its own default.
+
+---
+
+## 14. String Helpers
+
+String columns expose convenience methods that build `LIKE` and `ILIKE` patterns for the most common text searches. They save you from writing the `%` wildcards by hand and are only available on `String` (and `Option<String>`) columns.
+
+| Method | Pattern | Example |
+|---|---|---|
+| `starts_with(s)` | `s%` | username starts with "ali" |
+| `ends_with(s)` | `%s` | email ends with "@example.com" |
+| `contains(s)` | `%s%` | bio contains "rust" |
+| `istarts_with(s)` | case-insensitive `s%` | username starts with "ALI" (any case) |
+| `iends_with(s)` | case-insensitive `%s` | email ends with "@EXAMPLE.COM" |
+| `icontains(s)` | case-insensitive `%s%` | bio contains "Rust" (any case) |
+
+```rust
+// Find users whose username starts with "ali"
+User::query()
+    .filter(User::username.starts_with("ali"))
+    .all(&db)
+    .await?;
+
+// Find users whose email ends with a given domain
+User::query()
+    .filter(User::email.ends_with("@example.com"))
+    .all(&db)
+    .await?;
+
+// Substring search
+User::query()
+    .filter(User::username.contains("ali"))
+    .all(&db)
+    .await?;
+
+// Case-insensitive variants (SQLite: lower(col) LIKE lower(?))
+User::query()
+    .filter(User::username.icontains("ALICE"))
+    .all(&db)
+    .await?;
+```
+
+The `i`-prefixed variants delegate to `.ilike()`, which on SQLite renders as `lower(column) LIKE lower(pattern)`. Wildcards inside the search string (`%`, `_`) are **not** escaped — use `.like()` directly if you need to pass a pattern with explicit wildcards.
