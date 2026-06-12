@@ -352,6 +352,21 @@ impl<M, T: Numeric> Column<M, T> {
     pub fn rem<V: IntoSqlValue<T>>(self, value: V) -> Expr {
         self.expr().rem(Expr::value(value.into_sql_value()))
     }
+
+    /// `round(column)`.
+    pub fn round(self) -> Expr {
+        Expr::func("round", [self.expr()])
+    }
+
+    /// `ceil(column)`.
+    pub fn ceil(self) -> Expr {
+        Expr::func("ceil", [self.expr()])
+    }
+
+    /// `floor(column)`.
+    pub fn floor(self) -> Expr {
+        Expr::func("floor", [self.expr()])
+    }
 }
 
 impl<M> Column<M, String> {
@@ -408,6 +423,23 @@ impl<M> Column<M, String> {
     /// Case-insensitive `contains`.
     pub fn icontains(self, needle: &str) -> Expr {
         self.ilike(&format!("%{needle}%"))
+    }
+
+    /// `substr(column, start)` — 1-based, returns from `start` to end.
+    pub fn substr(self, start: i64) -> Expr {
+        Expr::func("substr", [self.expr(), Expr::value(Value::Int(start))])
+    }
+
+    /// `substr(column, start, len)` — 1-based, returns `len` characters.
+    pub fn substr_len(self, start: i64, len: i64) -> Expr {
+        Expr::func(
+            "substr",
+            [
+                self.expr(),
+                Expr::value(Value::Int(start)),
+                Expr::value(Value::Int(len)),
+            ],
+        )
     }
 }
 

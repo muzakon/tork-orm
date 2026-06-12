@@ -143,7 +143,8 @@ macro_rules! transaction {
 /// error type.
 pub mod prelude {
     pub use crate::{
-        abs, coalesce, func, length, lower, trim, upper, Assignment, BindValue, BoxFuture, Column,
+        abs, ceil, coalesce, concat, floor, func, length, lower, round, substr, substr_len, trim,
+        upper, Assignment, BindValue, BoxFuture, Column,
         ColumnDef, Database, ErrorKind, Executor, Expr, ForeignKeyDef, FromRow, FromValue,
         IndexColumn, IndexDef, IsolationLevel, Model, OrderItem, OrmError, Preloaded, QuerySet,
         Relation, RelationKind, Result, Row, SqlType, Transaction, TransactionBuilder, Value,
