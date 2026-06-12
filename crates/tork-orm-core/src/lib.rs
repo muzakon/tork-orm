@@ -48,7 +48,7 @@ pub use registry::{registered_models, ModelSchemaEntry, TableSchema};
 pub use model::{ColumnDef, ForeignKeyDef, FromRow, Model};
 pub use preload::{Preloaded, Preloader};
 pub use query::ast::{Join, JoinKind, OrderItem, SelectItem, SelectStatement};
-pub use query::column::{Column, IntoSqlValue, Numeric};
+pub use query::column::{Column, IntoAssignExpr, IntoSqlValue, Numeric};
 pub use query::expr::{AggFunc, BinaryOp, CaseWhen, Expr, LogicalOp};
 pub use query::func::{abs, coalesce, func, length, lower, trim, upper};
 pub use query::projection::{ExprTuple, IntoExpr, IntoSelectItem, Projection};

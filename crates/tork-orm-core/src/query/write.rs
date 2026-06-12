@@ -7,21 +7,22 @@
 use crate::query::expr::Expr;
 use crate::value::Value;
 
-/// A column assignment in an `UPDATE` (`column = value`).
+/// A column assignment in an `UPDATE` (`column = expression`).
 ///
-/// Built by [`Column::set`](crate::Column::set), so the assigned value is checked
-/// against the column's type.
+/// Built by [`Column::set`](crate::Column::set). The right-hand side is an
+/// [`Expr`], so it can be either a bound literal (`col.set("new")`) or an
+/// arbitrary expression (`col.set(col.add(1))`).
 #[derive(Debug, Clone)]
 pub struct Assignment {
     /// The column being assigned.
     pub column: &'static str,
-    /// The bound value to assign.
-    pub value: Value,
+    /// The expression to assign to the column.
+    pub value: Expr,
 }
 
 impl Assignment {
     /// Builds an assignment of `value` to `column`.
-    pub fn new(column: &'static str, value: Value) -> Self {
+    pub fn new(column: &'static str, value: Expr) -> Self {
         Self { column, value }
     }
 }

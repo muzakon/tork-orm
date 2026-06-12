@@ -13,6 +13,55 @@ use crate::query::expr::{AggFunc, BinaryOp, Expr};
 use crate::query::write::Assignment;
 use crate::value::{BindValue, Value};
 
+/// Accepted by [`Column::set`] — either a type-safe literal (`col.set(42_i64)`)
+/// or any expression (`col.set(col.add(1_i64))`).
+pub trait IntoAssignExpr<T> {
+    /// Converts `self` into an assignment expression.
+    fn into_assign_expr(self) -> Expr;
+}
+
+macro_rules! impl_assign_literal {
+    ($t:ty) => {
+        impl IntoAssignExpr<$t> for $t {
+            fn into_assign_expr(self) -> Expr {
+                Expr::value(self.to_value())
+            }
+        }
+        impl IntoAssignExpr<Option<$t>> for $t {
+            fn into_assign_expr(self) -> Expr {
+                Expr::value(self.to_value())
+            }
+        }
+    };
+}
+
+impl_assign_literal!(i64);
+impl_assign_literal!(i32);
+impl_assign_literal!(f64);
+impl_assign_literal!(bool);
+impl_assign_literal!(String);
+
+// &str → String column
+impl IntoAssignExpr<String> for &str {
+    fn into_assign_expr(self) -> Expr {
+        Expr::value(Value::Text(self.to_string()))
+    }
+}
+
+// Value directly — useful for NULL assignments on nullable columns
+impl<T> IntoAssignExpr<T> for Value {
+    fn into_assign_expr(self) -> Expr {
+        Expr::value(self)
+    }
+}
+
+// Expr — the escape hatch; accepts any column type
+impl<T> IntoAssignExpr<T> for Expr {
+    fn into_assign_expr(self) -> Expr {
+        self
+    }
+}
+
 /// Marker for column types that support numeric aggregates (`sum`, `avg`, `min`,
 /// `max`).
 pub trait Numeric {}
@@ -175,10 +224,16 @@ impl<M, T> Column<M, T> {
         OrderItem::new(self.expr(), true)
     }
 
-    /// Builds an `UPDATE` assignment, `column = value`, for use with
+    /// Builds a `SET column = …` assignment for use with
     /// [`QuerySet::update`](crate::QuerySet::update).
-    pub fn set<V: IntoSqlValue<T>>(self, value: V) -> Assignment {
-        Assignment::new(self.name, value.into_sql_value())
+    ///
+    /// Accepts either a type-safe literal or any [`Expr`]:
+    /// ```ignore
+    /// Post::title.set("New Title")                           // literal
+    /// Post::view_count.set(Post::view_count.add(1_i64))      // expression
+    /// ```
+    pub fn set<A: IntoAssignExpr<T>>(self, value: A) -> Assignment {
+        Assignment::new(self.name, value.into_assign_expr())
     }
 
     /// Aliases this column in a projection, `column AS "alias"`.

@@ -375,7 +375,7 @@ impl<'a> QueryWriter<'a> {
             }
             self.push_identifier(assignment.column);
             self.push_sql(" = ");
-            self.push_bind(assignment.value.clone());
+            self.write_expr(&assignment.value);
         }
         self.write_where(&statement.filters);
     }

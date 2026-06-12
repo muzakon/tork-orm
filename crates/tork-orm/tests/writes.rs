@@ -14,10 +14,30 @@ struct User {
     is_active: bool,
 }
 
+#[derive(Debug, Clone, Model)]
+#[table(name = "counters")]
+struct Counter {
+    #[field(primary_key, auto)]
+    id: i64,
+    hits: i64,
+}
+
 async fn empty_db() -> Database {
     let db = Database::connect(":memory:", 1).await.unwrap();
     db.execute(
         "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL, email TEXT NOT NULL, is_active INTEGER NOT NULL)"
+            .into(),
+        vec![],
+    )
+    .await
+    .unwrap();
+    db
+}
+
+async fn counter_db() -> Database {
+    let db = Database::connect(":memory:", 1).await.unwrap();
+    db.execute(
+        "CREATE TABLE counters (id INTEGER PRIMARY KEY, hits INTEGER NOT NULL DEFAULT 0)"
             .into(),
         vec![],
     )
@@ -135,4 +155,74 @@ async fn query_delete_removes_matching_rows() {
     let all_removed = User::query().delete(&db).await.unwrap();
     assert_eq!(all_removed, 2);
     assert_eq!(User::query().count(&db).await.unwrap(), 0);
+}
+
+// ── instance delete ───────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn delete_instance_removes_exactly_one_row() {
+    let db = empty_db().await;
+    User::bulk_create(
+        &db,
+        &[new_user("alice"), new_user("bob"), new_user("carol")],
+    )
+    .await
+    .unwrap();
+
+    let bob = User::query()
+        .filter(User::username.eq("bob"))
+        .one(&db)
+        .await
+        .unwrap();
+
+    let removed = bob.delete(&db).await.unwrap();
+    assert_eq!(removed, 1);
+    assert_eq!(User::query().count(&db).await.unwrap(), 2);
+    assert!(!User::query()
+        .filter(User::username.eq("bob"))
+        .exists(&db)
+        .await
+        .unwrap());
+}
+
+#[tokio::test]
+async fn delete_nonexistent_instance_returns_zero() {
+    let db = empty_db().await;
+    let ghost = User { id: 999, username: "ghost".into(), email: "g@example.com".into(), is_active: false };
+    let removed = ghost.delete(&db).await.unwrap();
+    assert_eq!(removed, 0);
+}
+
+// ── expression UPDATE ─────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn update_set_with_expr_increments_atomically() {
+    let db = counter_db().await;
+    let c = Counter::create(&db, &Counter { id: 0, hits: 10 }).await.unwrap();
+
+    let changed = Counter::query()
+        .filter(Counter::id.eq(c.id))
+        .update(&db, [Counter::hits.set(Counter::hits.add(5_i64))])
+        .await
+        .unwrap();
+    assert_eq!(changed, 1);
+
+    let reloaded = Counter::query().filter(Counter::id.eq(c.id)).one(&db).await.unwrap();
+    assert_eq!(reloaded.hits, 15);
+}
+
+#[tokio::test]
+async fn update_set_with_literal_still_binds_param() {
+    let db = counter_db().await;
+    let c = Counter::create(&db, &Counter { id: 0, hits: 0 }).await.unwrap();
+
+    let changed = Counter::query()
+        .filter(Counter::id.eq(c.id))
+        .update(&db, [Counter::hits.set(42_i64)])
+        .await
+        .unwrap();
+    assert_eq!(changed, 1);
+
+    let reloaded = Counter::query().filter(Counter::id.eq(c.id)).one(&db).await.unwrap();
+    assert_eq!(reloaded.hits, 42);
 }

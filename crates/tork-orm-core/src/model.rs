@@ -253,7 +253,7 @@ pub trait Model: FromRow + Send + Sync + 'static {
             let assignments: Vec<Assignment> = self
                 .insert_values()
                 .into_iter()
-                .map(|(column, value)| Assignment { column, value })
+                .map(|(column, value)| Assignment::new(column, Expr::value(value)))
                 .collect();
             let statement = UpdateStatement {
                 table: Self::TABLE,
@@ -266,6 +266,26 @@ pub trait Model: FromRow + Send + Sync + 'static {
             };
             let (sql, params) = crate::dialect::render_update(executor.dialect(), &statement);
             Ok(executor.execute(sql, params).await?.rows_affected)
+        }
+    }
+
+    /// Deletes the row identified by this instance's primary key, returning the
+    /// number of rows removed (zero if no row with that key exists).
+    fn delete<E: Executor + Send>(
+        &self,
+        executor: E,
+    ) -> impl std::future::Future<Output = crate::Result<u64>> + Send
+    where
+        Self: Sized,
+    {
+        let pk = self.primary_key_value();
+        async move {
+            let filter = Expr::binary(
+                Expr::column(Self::TABLE, Self::PRIMARY_KEY),
+                BinaryOp::Eq,
+                Expr::value(pk),
+            );
+            Self::query().filter(filter).delete(executor).await
         }
     }
 }
