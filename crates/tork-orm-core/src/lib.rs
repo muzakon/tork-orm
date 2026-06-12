@@ -47,7 +47,7 @@ pub use index::{IndexColumn, IndexDef, NullsOrder};
 pub use registry::{registered_models, ModelSchemaEntry, TableSchema};
 pub use model::{ColumnDef, ColumnDefault, ForeignKeyDef, FromRow, Model, ModelHooks};
 pub use preload::{Preloaded, Preloader};
-pub use query::ast::{Join, JoinKind, OrderItem, SelectItem, SelectStatement, UnionStatement};
+pub use query::ast::{Cte, CteQuery, Join, JoinKind, OrderItem, SelectItem, SelectStatement, UnionStatement, WithClause};
 pub use query::UnionQuery;
 pub use query::column::{Column, IntoAssignExpr, IntoSqlValue, Numeric};
 pub use query::expr::{

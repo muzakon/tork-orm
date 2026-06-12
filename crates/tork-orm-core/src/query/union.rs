@@ -52,6 +52,13 @@ impl<M: Model> UnionQuery<M> {
         }
     }
 
+    /// Consumes this union and returns the underlying [`UnionStatement`].
+    ///
+    /// Useful for building CTE bodies in `WITH` clauses.
+    pub fn into_statement(self) -> UnionStatement {
+        self.statement
+    }
+
     /// Appends another branch as `UNION` (distinct).
     pub fn union(mut self, other: QuerySet<M>) -> Self {
         self.statement.rest.push((false, other.into_statement()));

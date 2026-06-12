@@ -105,9 +105,40 @@ impl OrderItem {
     }
 }
 
+/// A Common Table Expression: `name [(columns)] AS (query)`.
+#[derive(Debug, Clone)]
+pub struct Cte {
+    /// The CTE name.
+    pub name: &'static str,
+    /// Optional output column names (the parenthesised list after the name).
+    pub columns: Option<Vec<&'static str>>,
+    /// The CTE body — a `SELECT` or `UNION` statement.
+    pub query: CteQuery,
+}
+
+/// The body of a Common Table Expression.
+#[derive(Debug, Clone)]
+pub enum CteQuery {
+    /// A plain `SELECT` statement.
+    Select(SelectStatement),
+    /// A `UNION` / `UNION ALL` of several `SELECT` statements.
+    Union(Box<UnionStatement>),
+}
+
+/// The `WITH [RECURSIVE]` clause at the head of a `SELECT` statement.
+#[derive(Debug, Clone)]
+pub struct WithClause {
+    /// Whether this is `WITH RECURSIVE`.
+    pub recursive: bool,
+    /// The list of Common Table Expressions.
+    pub ctes: Vec<Cte>,
+}
+
 /// A `SELECT` statement.
 #[derive(Debug, Clone)]
 pub struct SelectStatement {
+    /// An optional `WITH` clause at the head of the statement.
+    pub with: Option<WithClause>,
     /// The table being queried.
     pub table: &'static str,
     /// The projected items.
@@ -159,6 +190,7 @@ impl SelectStatement {
     /// Builds a statement selecting the given columns from `table`.
     pub fn new(table: &'static str, projection: Vec<SelectItem>) -> Self {
         Self {
+            with: None,
             table,
             projection,
             joins: Vec::new(),

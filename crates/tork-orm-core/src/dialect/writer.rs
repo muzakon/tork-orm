@@ -6,7 +6,7 @@
 //! share one rendering walk and differ only in their primitives.
 
 use crate::dialect::Dialect;
-use crate::query::ast::{JoinKind, SelectItem, SelectStatement, UnionStatement};
+use crate::query::ast::{CteQuery, JoinKind, SelectItem, SelectStatement, UnionStatement, WithClause};
 use crate::query::expr::{Expr, WindowBound};
 use crate::query::write::{DeleteStatement, InsertStatement, OnConflict, UpdateStatement};
 use crate::value::Value;
@@ -287,6 +287,37 @@ impl<'a> QueryWriter<'a> {
         }
     }
 
+    /// Renders a `WITH [RECURSIVE] cte AS (query), ...` clause.
+    fn write_with_clause(&mut self, with: &WithClause) {
+        self.push_sql("WITH ");
+        if with.recursive {
+            self.push_sql("RECURSIVE ");
+        }
+        for (i, cte) in with.ctes.iter().enumerate() {
+            if i != 0 {
+                self.push_sql(", ");
+            }
+            self.push_identifier(cte.name);
+            if let Some(cols) = &cte.columns {
+                self.sql.push('(');
+                for (j, col) in cols.iter().enumerate() {
+                    if j != 0 {
+                        self.push_sql(", ");
+                    }
+                    self.push_identifier(col);
+                }
+                self.sql.push(')');
+            }
+            self.push_sql(" AS (");
+            match &cte.query {
+                CteQuery::Select(stmt) => self.write_select(stmt),
+                CteQuery::Union(stmt) => self.write_union(stmt),
+            }
+            self.sql.push(')');
+        }
+        self.sql.push(' ');
+    }
+
     /// Renders a case-insensitive LIKE as `lower(left) LIKE lower(right)`.
     ///
     /// SQLite has no ILIKE keyword; the `lower()` wrapping makes the comparison
@@ -361,6 +392,9 @@ impl<'a> QueryWriter<'a> {
 
     /// Renders a `SELECT` statement.
     pub fn write_select(&mut self, statement: &SelectStatement) {
+        if let Some(with) = &statement.with {
+            self.write_with_clause(with);
+        }
         self.push_sql("SELECT ");
         if statement.distinct {
             self.push_sql("DISTINCT ");

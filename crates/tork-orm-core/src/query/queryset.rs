@@ -11,7 +11,7 @@ use crate::dialect::{render_count, render_delete, render_exists, render_select, 
 use crate::error::OrmError;
 use crate::executor::Executor;
 use crate::model::{FromRow, Model};
-use crate::query::ast::{JoinKind, OrderItem, SelectItem, SelectStatement};
+use crate::query::ast::{Cte, CteQuery, JoinKind, OrderItem, SelectItem, SelectStatement, WithClause};
 use crate::query::column::Column;
 use crate::query::expr::{BinaryOp, Expr};
 use crate::query::write::{Assignment, DeleteStatement, UpdateStatement};
@@ -286,6 +286,68 @@ impl<M: Model> QuerySet<M> {
     /// SQLite 3.54+). Has no effect on read-only connections.
     pub fn for_update(mut self) -> Self {
         self.statement.for_update = true;
+        self
+    }
+
+    /// Attaches a `WITH` clause with one or more Common Table Expressions.
+    ///
+    /// Each CTE is given as `(name, query)`. The query can be built from a
+    /// `QuerySet` via [`into_statement`](Self::into_statement) or as a
+    /// [`UnionStatement`].
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let regional = User::query().filter(User::region.eq("EU"));
+    /// let admins = User::query().filter(User::is_admin.eq(true));
+    /// let qs = User::query()
+    ///     .with([("regional", CteQuery::Select(regional.into_statement()))])
+    ///     .filter_raw("id IN (SELECT id FROM regional)", []);
+    /// ```
+    pub fn with(mut self, ctes: impl IntoIterator<Item = (&'static str, CteQuery)>) -> Self {
+        self.statement.with = Some(WithClause {
+            recursive: false,
+            ctes: ctes
+                .into_iter()
+                .map(|(name, query)| Cte { name, columns: None, query })
+                .collect(),
+        });
+        self
+    }
+
+    /// Attaches a `WITH RECURSIVE` clause with one or more Common Table
+    /// Expressions. Recursive CTEs reference themselves by name in the second
+    /// branch of a `UNION ALL`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let cte = User::query()
+    ///     .filter(User::parent_id.is_null())
+    ///     .select((User::id, User::name, User::parent_id))
+    ///     .union_all(
+    ///         User::query()
+    ///             .filter(User::parent_id.is_not_null())
+    ///             .select((User::id, User::name, User::parent_id)),
+    ///     );
+    /// let qs = User::query()
+    ///     .with_recursive([("ancestors", cte)]);
+    /// ```
+    pub fn with_recursive(
+        mut self,
+        ctes: impl IntoIterator<Item = (&'static str, crate::query::union::UnionQuery<M>)>,
+    ) -> Self {
+        self.statement.with = Some(WithClause {
+            recursive: true,
+            ctes: ctes
+                .into_iter()
+                .map(|(name, query)| Cte {
+                    name,
+                    columns: None,
+                    query: CteQuery::Union(Box::new(query.into_statement())),
+                })
+                .collect(),
+        });
         self
     }
 

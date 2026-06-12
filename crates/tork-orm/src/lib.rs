@@ -155,10 +155,11 @@ pub mod prelude {
     };
     pub use crate::{
         Assignment, BindValue, BoxFuture, Column,
-        ColumnDef, ColumnDefault, Database, ErrorKind, Executor, Expr, ExprOver, ForeignKeyDef, FromRow, FromValue,
+        ColumnDef, ColumnDefault, Cte, CteQuery, Database, ErrorKind, Executor, Expr, ExprOver,
+        ForeignKeyDef, FromRow, FromValue,
         IndexColumn, IndexDef, IsolationLevel, Json, Model, ModelHooks, OrderItem, OrmError, Preloaded, QuerySet,
-        Relation, RelationKind, Result, Row, SqlType, Transaction, TransactionBuilder, Value,
-        Window, WindowBound, WindowFrame, WindowFrameUnit,
+        Relation, RelationKind, Result, Row, SqlType, Transaction, TransactionBuilder, UnionStatement, Value,
+        Window, WindowBound, WindowFrame, WindowFrameUnit, WithClause,
     };
     // The derive and attribute macros (`Model`, `relations`).
     pub use tork_orm_macros::*;
