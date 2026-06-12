@@ -10,7 +10,7 @@ use crate::value::Value;
 /// Controls what happens when an inserted row conflicts with an existing one.
 ///
 /// Used in [`InsertStatement`] and produced by [`Model::upsert`](crate::Model::upsert).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Default)]
 pub enum OnConflict {
     /// Standard `INSERT INTO` — propagate the conflict as an error (default).
     #[default]
@@ -23,6 +23,18 @@ pub enum OnConflict {
     Replace,
     /// `INSERT OR IGNORE INTO` — silently skip on conflict.
     Ignore,
+    /// `ON CONFLICT (constraint) DO UPDATE SET ...` — PostgreSQL-style upsert.
+    ///
+    /// The conflict is resolved by running the given `updates` on the existing
+    /// row. The `constraint` columns name the unique/index columns that identify
+    /// a conflict. Backends without native `ON CONFLICT ... DO UPDATE` (SQLite
+    /// < 3.24) should render this as a fallback or error.
+    Update {
+        /// The conflict-target columns (e.g. the unique constraint columns).
+        constraint: Vec<&'static str>,
+        /// The column assignments to apply when a conflict occurs.
+        updates: Vec<Assignment>,
+    },
 }
 
 /// A column assignment in an `UPDATE` (`column = expression`).
