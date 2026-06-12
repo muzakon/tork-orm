@@ -361,6 +361,38 @@ async fn filter_raw_no_params_works() {
     assert_eq!(users, 4);
 }
 
+// ── EXISTS / NOT EXISTS ───────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn exists_subquery_returns_all_when_match_found() {
+    let db = seed().await;
+    // EXISTS (SELECT ... WHERE is_active = true) — the seed has active users,
+    // so the EXISTS is true and all outer rows are returned.
+    let users = User::query()
+        .filter(Expr::exists(
+            User::query().filter(User::is_active.eq(true)),
+        ))
+        .count(&db)
+        .await
+        .unwrap();
+    assert_eq!(users, 4);
+}
+
+#[tokio::test]
+async fn not_exists_returns_empty_when_subquery_has_rows() {
+    let db = seed().await;
+    // NOT EXISTS (...) where the subquery matches — predicate is false for every
+    // outer row, so the result set is empty.
+    let users = User::query()
+        .filter(Expr::not_exists(
+            User::query().filter(User::is_active.eq(true)),
+        ))
+        .count(&db)
+        .await
+        .unwrap();
+    assert_eq!(users, 0);
+}
+
 // ── SUBQUERIES ────────────────────────────────────────────────────────────────
 
 #[tokio::test]

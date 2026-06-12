@@ -220,6 +220,16 @@ pub enum Expr {
         /// Bound parameters, matched positionally to each `?` placeholder.
         params: Vec<Value>,
     },
+    /// An existence test — `EXISTS (SELECT ...)` or `NOT EXISTS (SELECT ...)`.
+    ///
+    /// Typically used with a correlated subquery that references a column from
+    /// the outer query via [`Column::expr`](crate::Column::expr).
+    Exists {
+        /// The subquery to test.
+        subquery: Box<SelectStatement>,
+        /// `true` → `NOT EXISTS`.
+        negated: bool,
+    },
 }
 
 /// Builder for a `CASE WHEN` expression.
@@ -398,6 +408,24 @@ impl Expr {
     /// [`QuerySet::filter_raw`](crate::QuerySet) instead.
     pub fn raw(sql: impl Into<String>) -> Self {
         Expr::Raw { sql: sql.into(), params: Vec::new() }
+    }
+
+    /// Builds `EXISTS (SELECT ...)` — true when the subquery returns any row.
+    ///
+    /// Use a correlated subquery to test a relationship from the outer row:
+    /// ```ignore
+    /// User::query()
+    ///     .filter(Expr::exists(
+    ///         Post::query().filter(Post::user_id.eq(User::id.expr())),
+    ///     ))
+    /// ```
+    pub fn exists<X: crate::model::Model>(qs: crate::query::queryset::QuerySet<X>) -> Self {
+        Expr::Exists { subquery: Box::new(qs.into_statement()), negated: false }
+    }
+
+    /// Builds `NOT EXISTS (SELECT ...)` — true when the subquery returns no rows.
+    pub fn not_exists<X: crate::model::Model>(qs: crate::query::queryset::QuerySet<X>) -> Self {
+        Expr::Exists { subquery: Box::new(qs.into_statement()), negated: true }
     }
 
     /// Aliases this expression, `expr AS "alias"`.

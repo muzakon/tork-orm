@@ -389,6 +389,36 @@ fn raw_expr_in_binary_comparison() {
     assert!(params.is_empty());
 }
 
+// ── EXISTS / NOT EXISTS ───────────────────────────────────────────────────────
+
+#[test]
+fn exists_renders_correctly() {
+    let subq = User::query().filter(User::is_active.eq(true));
+    let expr = Expr::exists(subq);
+    let (sql, _) = render(&expr);
+    assert!(sql.starts_with("EXISTS (SELECT"), "expected EXISTS (SELECT in: {sql}");
+    assert!(sql.ends_with(')'), "expected closing paren in: {sql}");
+}
+
+#[test]
+fn not_exists_renders_correctly() {
+    let subq = User::query().filter(User::is_active.eq(false));
+    let expr = Expr::not_exists(subq);
+    let (sql, _) = render(&expr);
+    assert!(sql.starts_with("NOT EXISTS (SELECT"), "expected NOT EXISTS (SELECT in: {sql}");
+    assert!(sql.ends_with(')'), "expected closing paren in: {sql}");
+}
+
+#[test]
+fn exists_binds_subquery_params() {
+    let subq = User::query().filter(User::is_active.eq(true));
+    let expr = Expr::exists(subq);
+    let (_, params) = render(&expr);
+    // is_active = true binds one param
+    assert_eq!(params.len(), 1);
+    assert_eq!(params[0], Value::Bool(true));
+}
+
 // ── SUBQUERIES ────────────────────────────────────────────────────────────────
 
 #[test]

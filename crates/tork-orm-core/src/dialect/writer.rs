@@ -189,6 +189,11 @@ impl<'a> QueryWriter<'a> {
                     self.params.push(p.clone());
                 }
             }
+            Expr::Exists { subquery, negated } => {
+                self.push_sql(if *negated { "NOT EXISTS (" } else { "EXISTS (" });
+                self.write_select(subquery);
+                self.sql.push(')');
+            }
         }
     }
 
