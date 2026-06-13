@@ -14,7 +14,7 @@ use crate::error::OrmError;
 use crate::executor::Executor;
 use crate::model::{FromRow, Model};
 use crate::query::ast::{
-    Cte, CteQuery, JoinKind, LockClause, LockStrength, LockWait, OrderItem, SelectItem,
+    Cte, CteQuery, JoinKind, LockClause, LockStrength, LockWait, OrderTerm, SelectItem,
     SelectStatement, UnionStatement, WithClause,
 };
 use crate::query::column::Column;
@@ -340,7 +340,7 @@ impl<M: Model> QuerySet<M> {
     }
 
     /// Adds an ordering term (build it with `Column::asc`/`Column::desc`).
-    pub fn order_by(mut self, term: OrderItem) -> Self {
+    pub fn order_by(mut self, term: OrderTerm) -> Self {
         self.statement.order_by.push(term);
         self
     }
@@ -730,7 +730,7 @@ impl<M: Model> QuerySet<M> {
     /// # #[derive(Clone)] struct User; impl tork_orm_core::FromRow for User { fn from_row(_: &tork_orm_core::Row) -> tork_orm_core::Result<Self> { Ok(User) } } impl Model for User { const TABLE: &'static str = "users"; const COLUMNS: &'static [tork_orm_core::ColumnDef] = &[]; const PRIMARY_KEY: &'static str = "id"; fn insert_values(&self) -> Vec<(&'static str, Value)> { vec![] } fn primary_key_value(&self) -> Value { Value::Null } } impl tork_orm_core::ModelHooks for User {}
     /// # async fn run(db: Database) -> tork_orm_core::Result<()> {
     /// let page: Page<User> = User::query()
-    ///     .order_by(User::query().into_statement().filters.is_empty().then_some(tork_orm_core::OrderItem::new(tork_orm_core::Expr::Value(Value::Int(0)), false)).unwrap_or(tork_orm_core::OrderItem::new(tork_orm_core::Expr::Value(Value::Int(0)), false)))
+    ///     .order_by(User::query().into_statement().filters.is_empty().then_some(tork_orm_core::OrderTerm::new(tork_orm_core::Expr::Value(Value::Int(0)), false)).unwrap_or(tork_orm_core::OrderTerm::new(tork_orm_core::Expr::Value(Value::Int(0)), false)))
     ///     .paginate(&db, 1, 20)
     ///     .await?;
     /// println!("Page {} of {} ({} items)", page.page, page.pages, page.items.len());
@@ -1109,7 +1109,7 @@ fn scope_filter(table: &'static str, column: &'static str, deleted: bool) -> Exp
 ///
 /// Each `>` is flipped to `<` when the term is `DESC`, and again when walking
 /// backwards (`after = false`).
-fn keyset_predicate(order: &[OrderItem], cursor: &[Value], after: bool) -> Expr {
+fn keyset_predicate(order: &[OrderTerm], cursor: &[Value], after: bool) -> Expr {
     assert!(
         !order.is_empty(),
         "keyset pagination requires at least one `order_by` term"

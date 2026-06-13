@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-use crate::query::ast::{OrderItem, SelectStatement};
+use crate::query::ast::{OrderTerm, SelectStatement};
 use crate::value::{BindValue, Value};
 
 /// An aggregate function applied to an expression.
@@ -128,7 +128,7 @@ pub struct Window {
     /// `PARTITION BY` expressions.
     pub partition_by: Vec<Expr>,
     /// `ORDER BY` terms.
-    pub order_by: Vec<OrderItem>,
+    pub order_by: Vec<OrderTerm>,
     /// An optional frame clause (`ROWS BETWEEN …` / `RANGE BETWEEN …`).
     pub frame: Option<WindowFrame>,
 }
@@ -168,7 +168,7 @@ impl ExprOver {
     }
 
     /// Sets `ORDER BY` terms.
-    pub fn order_by(mut self, terms: impl IntoIterator<Item = OrderItem>) -> Self {
+    pub fn order_by(mut self, terms: impl IntoIterator<Item = OrderTerm>) -> Self {
         self.window.order_by = terms.into_iter().collect();
         self
     }
@@ -856,12 +856,12 @@ impl Expr {
     }
 
     /// Orders by this expression ascending.
-    pub fn asc(self) -> OrderItem {
-        OrderItem::new(self, false)
+    pub fn asc(self) -> OrderTerm {
+        OrderTerm::new(self, false)
     }
 
     /// Orders by this expression descending.
-    pub fn desc(self) -> OrderItem {
-        OrderItem::new(self, true)
+    pub fn desc(self) -> OrderTerm {
+        OrderTerm::new(self, true)
     }
 }

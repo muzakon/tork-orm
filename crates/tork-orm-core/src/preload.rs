@@ -258,7 +258,7 @@ impl<M: Model> Preloader<M> {
     }
 
     /// Orders the parents.
-    pub fn order_by(mut self, term: crate::query::ast::OrderItem) -> Self {
+    pub fn order_by(mut self, term: crate::query::ast::OrderTerm) -> Self {
         self.base = self.base.order_by(term);
         self
     }

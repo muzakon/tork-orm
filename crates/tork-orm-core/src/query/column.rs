@@ -8,7 +8,7 @@
 
 use std::marker::PhantomData;
 
-use crate::query::ast::OrderItem;
+use crate::query::ast::OrderTerm;
 use crate::query::expr::{AggFunc, BinaryOp, Expr};
 use crate::query::queryset::QuerySet;
 use crate::query::write::Assignment;
@@ -239,13 +239,13 @@ impl<M, T> Column<M, T> {
     }
 
     /// Orders by this column ascending.
-    pub fn asc(self) -> OrderItem {
-        OrderItem::new(self.expr(), false)
+    pub fn asc(self) -> OrderTerm {
+        OrderTerm::new(self.expr(), false)
     }
 
     /// Orders by this column descending.
-    pub fn desc(self) -> OrderItem {
-        OrderItem::new(self.expr(), true)
+    pub fn desc(self) -> OrderTerm {
+        OrderTerm::new(self.expr(), true)
     }
 
     /// Builds a `SET column = …` assignment for use with

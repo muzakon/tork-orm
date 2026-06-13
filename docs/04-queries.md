@@ -422,7 +422,7 @@ When `.else_()` is omitted, `NULL` is returned for rows that match no branch (st
 
 ### NULLS FIRST / NULLS LAST
 
-By default, `NULL` placement in `ORDER BY` is database-defined (SQLite puts `NULL` before non-null values when sorting ascending). To make the placement explicit, chain `.nulls_first()` or `.nulls_last()` onto any `OrderItem`:
+By default, `NULL` placement in `ORDER BY` is database-defined (SQLite puts `NULL` before non-null values when sorting ascending). To make the placement explicit, chain `.nulls_first()` or `.nulls_last()` onto any `OrderTerm`:
 
 ```rust
 // NULLs sorted last in an ascending column (common production default)

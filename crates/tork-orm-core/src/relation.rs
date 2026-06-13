@@ -10,7 +10,7 @@
 
 use std::marker::PhantomData;
 
-use crate::query::ast::{Join, JoinKind, OrderItem};
+use crate::query::ast::{Join, JoinKind, OrderTerm};
 use crate::query::expr::Expr;
 
 /// The kind of association between two models.
@@ -32,7 +32,7 @@ pub struct Relation<P, C> {
     to_table: &'static str,
     to_column: &'static str,
     filters: Vec<Expr>,
-    order_by: Vec<OrderItem>,
+    order_by: Vec<OrderTerm>,
     _marker: PhantomData<fn() -> (P, C)>,
 }
 
@@ -84,7 +84,7 @@ impl<P, C> Relation<P, C> {
     }
 
     /// Orders the related rows loaded by [`preload`](crate::QuerySet::preload).
-    pub fn order_by(mut self, term: OrderItem) -> Self {
+    pub fn order_by(mut self, term: OrderTerm) -> Self {
         self.order_by.push(term);
         self
     }
@@ -115,7 +115,7 @@ impl<P, C> Relation<P, C> {
     }
 
     /// Returns the ordering applied when preloading.
-    pub fn preload_order_by(&self) -> &[OrderItem] {
+    pub fn preload_order_by(&self) -> &[OrderTerm] {
         &self.order_by
     }
 

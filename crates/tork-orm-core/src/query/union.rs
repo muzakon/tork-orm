@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use crate::dialect::render_union;
 use crate::executor::Executor;
 use crate::model::{FromRow, Model};
-use crate::query::ast::{OrderItem, UnionStatement};
+use crate::query::ast::{OrderTerm, UnionStatement};
 use crate::query::queryset::QuerySet;
 
 /// A typed `UNION` (or `UNION ALL`) query over model `M`.
@@ -72,7 +72,7 @@ impl<M: Model> UnionQuery<M> {
     }
 
     /// Appends an ordering term applied to the whole combined result.
-    pub fn order_by(mut self, term: OrderItem) -> Self {
+    pub fn order_by(mut self, term: OrderTerm) -> Self {
         self.statement.order_by.push(term);
         self
     }

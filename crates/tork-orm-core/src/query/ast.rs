@@ -79,7 +79,7 @@ pub struct Join {
 
 /// A single `ORDER BY` term.
 #[derive(Debug, Clone)]
-pub struct OrderItem {
+pub struct OrderTerm {
     /// The expression to order by.
     pub expr: Expr,
     /// Whether to sort descending.
@@ -89,7 +89,7 @@ pub struct OrderItem {
     pub nulls: Option<bool>,
 }
 
-impl OrderItem {
+impl OrderTerm {
     /// Builds an order term with the database's default NULL placement.
     pub fn new(expr: Expr, descending: bool) -> Self {
         Self { expr, descending, nulls: None }
@@ -155,7 +155,7 @@ pub struct SelectStatement {
     /// The `HAVING` predicate.
     pub having: Option<Expr>,
     /// The ordering terms.
-    pub order_by: Vec<OrderItem>,
+    pub order_by: Vec<OrderTerm>,
     /// An optional row limit.
     pub limit: Option<u64>,
     /// An optional row offset.
@@ -230,7 +230,7 @@ pub struct UnionStatement {
     /// `false` for `UNION` (distinct).
     pub rest: Vec<(bool, SelectStatement)>,
     /// `ORDER BY` terms applied after all branches are combined.
-    pub order_by: Vec<OrderItem>,
+    pub order_by: Vec<OrderTerm>,
     /// Optional row limit applied to the combined result.
     pub limit: Option<u64>,
     /// Optional row offset applied to the combined result.

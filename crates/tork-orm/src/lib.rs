@@ -160,7 +160,7 @@ pub mod prelude {
         Assignment, BindValue, BoxFuture, Column,
         ColumnDef, ColumnDefault, Cte, CteQuery, Database, DbEnum, ErrorKind, Executor, Expr, ExprOver,
         ForeignKeyDef, FromRow, FromValue,
-        IndexColumn, IndexDef, IsolationLevel, Json, Model, ModelHooks, OrderItem, OrmError, Preloaded, QuerySet,
+        IndexColumn, IndexDef, IsolationLevel, Json, Model, ModelHooks, OrderTerm, OrmError, Preloaded, QuerySet,
         Relation, RelationKind, Result, Row, SqlType, Transaction, TransactionBuilder, UnionStatement, Value,
         Window, WindowBound, WindowFrame, WindowFrameUnit, WithClause,
     };
