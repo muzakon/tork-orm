@@ -87,6 +87,12 @@ impl Inner {
             conn.pragma_update(None, "journal_mode", "WAL")
                 .map_err(|e| OrmError::connection("cannot enable WAL").with_source(e))?;
         }
+        // Cap the per-connection prepared-statement cache so dynamically
+        // generated SQL strings (for example from raw query builders)
+        // cannot bloat memory indefinitely. 200 entries is generous enough
+        // for every statement a typical ORM workload generates, while
+        // bounding the worst-case memory footprint.
+        conn.set_prepared_statement_cache_capacity(200);
         Ok(conn)
     }
 }

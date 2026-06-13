@@ -281,6 +281,12 @@ impl FileMigrator {
                 "cannot run destructive migration without --allow-destructive",
             ));
         }
+        if file.transactional && has_ddl(&file.up_sql) {
+            eprintln!(
+                "tork-orm: warning: migration `{}` contains DDL                  (CREATE/ALTER/DROP TABLE) inside a transaction;                  some databases may auto-commit",
+                file.name
+            );
+        }
         if file.transactional {
             pinned.execute(self.begin_sql(), Vec::new()).await?;
         }
@@ -421,6 +427,15 @@ impl FileMigrator {
 fn is_destructive(sql: &str) -> bool {
     let upper = sql.to_uppercase();
     upper.contains("DROP TABLE") || upper.contains("DROP COLUMN")
+}
+
+/// Returns `true` if `sql` contains a DDL statement that triggers an implicit
+/// commit on databases such as MySQL.
+fn has_ddl(sql: &str) -> bool {
+    let upper = sql.to_uppercase();
+    upper.contains("CREATE TABLE")
+        || upper.contains("ALTER TABLE")
+        || upper.contains("DROP TABLE")
 }
 
 /// Returns the head revision of the chain in `dir` — the last migration — or

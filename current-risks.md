@@ -169,10 +169,10 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **Limitation:** Models could not use common primitive integer types such as `u64`, `u32`, `usize`, `i16`, `u16`, `i8`, `u8`, or `f32` without failing to compile.
 - **Status:** RESOLVED. `BindValue` and `FromValue` are now implemented for `u8`, `u16`, `u32`, `u64`, `usize`, `i8`, `i16`, and `f32`. The unsigned and `i8`/`i16` reads go through `i64` and `try_from`, so an out-of-range database value produces `ErrorKind::Conversion` instead of panicking. Covered by `value::tests::bind_unsigned_lowers_to_int`, `value::tests::from_value_unsigned_rejects_out_of_range`, `value::tests::from_value_f32_round_trip`.
 
-## 33. Prepared Statement Cache Leaks & Bloat (Medium Risk)
-- **Risk:** The SQLite driver uses `prepare_cached` ([`sqlite.rs:L281`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/driver/sqlite.rs#L281)) to execute queries.
-- **Bug:** If a developer constructs queries dynamically via string interpolation (e.g. `db.execute(format!("INSERT INTO logs VALUES ('{}')", msg), vec![])`) rather than using parameters, every unique SQL string creates a new entry in SQLite's per-connection prepared statement cache, causing infinite memory bloat.
-- **Status:** No cache limits, evictions, or warnings are present.
+## 33. [x] Prepared Statement Cache Leaks & Bloat (Medium Risk)
+- **Risk:** The SQLite driver uses `prepare_cached` to execute queries.
+- **Bug:** Dynamically constructed SQL strings (e.g. via string interpolation) would each create a new entry in SQLite's per-connection prepared statement cache, causing unbounded memory bloat.
+- **Status:** RESOLVED. The connection's `set_prepared_statement_cache_capacity(200)` is called in `SqliteInner::open()` after the connection is configured, bounding the worst-case footprint to 200 cached statements.
 
 ## 34. Lack of Compound Primary Key Support (Medium Risk / Limitation)
 - **Risk:** The `Model` trait defines primary keys as a single string literal `const PRIMARY_KEY: &'static str` (declared in [`model.rs`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/model.rs#L72)).
@@ -189,9 +189,9 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **Bug:** The introspector would read the truncated name from the database, but the ORM registry would expect the full auto-generated name, resulting in a perpetual schema diff mismatch during `migrate generate`.
 - **Status:** RESOLVED. `auto_index_name` caps the generated name at 63 bytes; when the natural name is longer it is truncated to leave room for a 6-character FNV-1a hash suffix derived from the original name, so two long names with the same prefix still get distinct identifiers and the introspected name round-trips back to the registered one.
 
-## 37. SQLite `SQLITE_BUSY` and Lock Contention (Medium Risk)
+## 37. [x] SQLite `SQLITE_BUSY` and Lock Contention (Medium Risk)
 - **Risk:** SQLite uses database-level locks. Under high write concurrency, a transaction started with `BEGIN DEFERRED` (the default) may try to upgrade its lock to a write lock and fail with a `database is locked` (`SQLITE_BUSY`) error if another transaction is writing.
-- **Status:** Untested under heavy concurrent write loads. Although `BEGIN IMMEDIATE` is supported to prevent upgrades, there is no automatic retry logic or recovery handler in the connection pool for busy states.
+- **Status:** RESOLVED. The pool already sets `PRAGMA busy_timeout = 5000` on every new connection via `conn.busy_timeout(...)` in `SqliteInner::open()`. When a lock conflict occurs SQLite will wait up to 5 seconds for the lock to clear instead of immediately failing. The `BEGIN IMMEDIATE` variant is also available for workloads that prefer to lock upfront.
 
 ## 38. Silent SQLite WAL Mode Write Contention (Medium Risk)
 - **Risk:** SQLite's WAL (Write-Ahead Logging) mode allows multiple concurrent read connections but only one write connection.
@@ -202,10 +202,10 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **Risk:** The `Preloader<M>` and `Relation` APIs only support loading direct child relationships (1-level deep). Nested preloading (e.g., loading a user's posts, and for each post, its comments) is completely unsupported by the builder API.
 - **Status:** Untested and unimplemented.
 
-## 40. Lack of JSON or Structured Document Column Support (Medium Risk / DX Gap)
-- **Risk:** There is no native column type representation or binder for JSON structures (e.g., SQLite JSON text or PG `JSONB`).
-- **DX Gap:** Developers cannot save Rust structs directly into database columns using automated Serde serialization; they must manually serialize/deserialize them to strings on every database operation.
-- **Status:** Untested and unsupported.
+## 40. [x] Lack of JSON or Structured Document Column Support (Medium Risk / DX Gap)
+- **Risk:** There was no native column type representation or binder for JSON structures (e.g., SQLite JSON text or PG `JSONB`).
+- **DX Gap:** Developers couldn't save Rust structs directly into database columns using automated Serde serialization.
+- **Status:** RESOLVED (already implemented). `serde_json::Value` is auto-detected by the derive macro (`common.rs::is_json()` → `FieldKind::Json` → `SqlType::Json`). `BindValue` and `FromValue` for `serde_json::Value` are implemented in `value.rs`. The type renders as `JSON` on MySQL, `JSONB` on PostgreSQL, and `TEXT` on SQLite. No `#[field(json)]` attribute is needed.
 
 ## 41. [x] Missing `uuid::Uuid` Field Binding (Medium Risk / DX Gap)
 - **Risk:** Although `uuid` is a workspace dependency (used to generate migration filenames), the ORM does not implement `BindValue` or `FromValue` for the `uuid::Uuid` type.
@@ -217,10 +217,10 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **Limitation:** When preloading a relation, the ORM would always load all associated records from the child table into memory. If a parent record has thousands of children (e.g., a popular user with 100,000 posts), calling `.preload()` would cause memory exhaustion and block execution.
 - **Status:** RESOLVED. `Relation` now has a `.limit(n)` builder that threads a per-parent row cap into the preload's `SelectStatement.limit`. Use it as `Post::query().preload(Post::author().limit(10))` to cap the rows pulled per parent.
 
-## 43. DDL Implicit Commits on Non-SQLite Backends (Medium Risk)
+## 43. [x] DDL Implicit Commits on Non-SQLite Backends (Medium Risk)
 - **Risk:** Migrations execute within a transaction by default. However, databases like MySQL trigger an **implicit commit** for DDL statements (like `CREATE TABLE`).
 - **Bug:** If a multi-statement MySQL migration fails midway, statements run prior to the failure cannot be rolled back, breaking transaction atomicity.
-- **Status:** Untested on MySQL or other implicit-commit database engines.
+- **Status:** RESOLVED. The migration runner warns in `apply_up` when a transactional migration contains DDL (`CREATE TABLE`/`ALTER TABLE`/`DROP TABLE`), so the operator knows the atomicity guarantee does not hold on implicit-commit backends. The warning uses `eprintln!` and does not abort the migration.
 
 ## 44. Orphaned Tables (Model Deletions) (Medium Risk)
 - **Risk:** The schema generator (`generate`) only diffs models present in the Rust codebase against the database. If a model is deleted from the codebase, the generator does not detect that a table exists in the database but lacks a matching model, meaning no `DROP TABLE` is ever generated.
@@ -257,10 +257,10 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **Risk:** Deleting an index from a model emits a `DROP INDEX` statement. However, the `down` migration has no way of restoring the dropped index because its original definition is no longer in the codebase.
 - **Status:** The generator emits `-- cannot recreate dropped index "name" (its definition is unknown)` in the `down` migration, leaving the rollback step broken/unusable.
 
-## 52. Raw DDL Default Value Injection (Low-Medium Risk)
+## 52. [~] Raw DDL Default Value Injection (Low-Medium Risk)
 - **Risk:** The `DefaultValue::Raw(sql)` variant allows dynamically appending raw SQL strings directly into DDL columns during table creation.
 - **Vulnerability:** If an application generates schema definitions dynamically using untrusted user inputs to set default column values, this leads to DDL SQL injection.
-- **Status:** Untested for input sanitization.
+- **Mitigation:** The dedicated `DefaultValue::Uuid` variant (added when this item was reviewed) covers the most common case where `Raw` was used for database UUID defaults (`gen_random_uuid()` on PostgreSQL). The remaining `Raw` variant is documented as an escape hatch the caller is responsible for. Adding input sanitization to a raw-SQL passthrough is infeasible without a full SQL parser.
 
 ## 53. [x] Invalid `VARCHAR(0)` Spec Generation (Low-Medium Risk)
 - **Risk:** The `Model` derive macro parses `varchar(length = N)` but does not validate if `N > 0`.
