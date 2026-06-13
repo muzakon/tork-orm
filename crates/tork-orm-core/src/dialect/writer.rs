@@ -53,6 +53,21 @@ impl<'a> QueryWriter<'a> {
         self.sql.push_str(sql);
     }
 
+    /// Appends a scalar function name, keeping only identifier-safe characters.
+    ///
+    /// Function names are rendered verbatim (not as bound parameters), so a name
+    /// built from untrusted input could otherwise inject SQL. Dropping everything
+    /// but letters, digits, `_`, and `.` leaves legitimate names (`count`,
+    /// `json_extract`, `schema.fn`) unchanged while neutralizing any payload into a
+    /// harmless token the database rejects as an unknown function.
+    fn push_function_name(&mut self, name: &str) {
+        for ch in name.chars() {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' {
+                self.sql.push(ch);
+            }
+        }
+    }
+
     /// Appends a quoted identifier.
     pub fn push_identifier(&mut self, identifier: &str) {
         self.dialect.quote_identifier(identifier, &mut self.sql);
@@ -86,12 +101,12 @@ impl<'a> QueryWriter<'a> {
             Value::Bool(flag) => self.sql.push_str(self.dialect.bool_literal(*flag)),
             Value::Int(number) => self.sql.push_str(&number.to_string()),
             Value::Real(number) => self.sql.push_str(&number.to_string()),
-            Value::Text(text) => quote_string_literal(text, &mut self.sql),
+            Value::Text(text) => self.dialect.escape_string_literal(text, &mut self.sql),
             Value::Timestamp(ts) => {
                 let text = ts
                     .format(&time::format_description::well_known::Rfc3339)
                     .unwrap_or_default();
-                quote_string_literal(&text, &mut self.sql);
+                self.dialect.escape_string_literal(&text, &mut self.sql);
             }
             Value::Blob(bytes) => {
                 self.sql.push_str("X'");
@@ -103,9 +118,15 @@ impl<'a> QueryWriter<'a> {
             }
             // PostgreSQL-specific values do not appear in the inline-literal contexts
             // (index predicates, DDL defaults); render a defensive quoted text form.
-            Value::Json(json) => quote_string_literal(&json.to_string(), &mut self.sql),
-            Value::Uuid(uuid) => quote_string_literal(&uuid.to_string(), &mut self.sql),
-            Value::Array(items) => quote_string_literal(&format!("{items:?}"), &mut self.sql),
+            Value::Json(json) => self
+                .dialect
+                .escape_string_literal(&json.to_string(), &mut self.sql),
+            Value::Uuid(uuid) => self
+                .dialect
+                .escape_string_literal(&uuid.to_string(), &mut self.sql),
+            Value::Array(items) => self
+                .dialect
+                .escape_string_literal(&format!("{items:?}"), &mut self.sql),
         }
     }
 
@@ -192,7 +213,7 @@ impl<'a> QueryWriter<'a> {
                 }
             }
             Expr::Func { name, args } => {
-                self.push_sql(name);
+                self.push_function_name(name);
                 self.sql.push('(');
                 for (index, arg) in args.iter().enumerate() {
                     if index != 0 {
@@ -394,7 +415,7 @@ impl<'a> QueryWriter<'a> {
             } else {
                 key.clone()
             };
-            quote_string_literal(&path, &mut self.sql);
+            self.dialect.escape_string_literal(&path, &mut self.sql);
         } else {
             self.write_expr(right);
         }
@@ -843,12 +864,34 @@ pub fn predicate_sql(dialect: &dyn Dialect, expr: &Expr) -> String {
 
 /// Writes a single-quoted SQL string literal, doubling embedded quotes.
 pub fn quote_string_literal(value: &str, out: &mut String) {
+    quote_string_literal_with(value, out, false);
+}
+
+/// Like [`quote_string_literal`] but also escapes backslashes, for backends where
+/// a backslash is an escape character inside single-quoted strings (MySQL, and
+/// PostgreSQL with the non-default `standard_conforming_strings = off`). Without
+/// this, a backslash before a quote could escape the doubled quote and break out
+/// of the literal.
+pub fn quote_string_literal_mysql(value: &str, out: &mut String) {
+    quote_string_literal_with(value, out, true);
+}
+
+/// Writes `value` as a single-quoted SQL literal, doubling embedded quotes and,
+/// when `escape_backslash` is set, doubling backslashes too.
+fn quote_string_literal_with(value: &str, out: &mut String, escape_backslash: bool) {
     out.push('\'');
     for ch in value.chars() {
-        if ch == '\'' {
-            out.push('\'');
+        match ch {
+            '\'' => {
+                out.push('\'');
+                out.push('\'');
+            }
+            '\\' if escape_backslash => {
+                out.push('\\');
+                out.push('\\');
+            }
+            _ => out.push(ch),
         }
-        out.push(ch);
     }
     out.push('\'');
 }

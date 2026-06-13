@@ -419,9 +419,16 @@ pub trait Model: FromRow + ModelHooks + Clone + Send + Sync + 'static {
                 })?;
                 Self::from_row(row)?
             } else {
-                // Fallback for backends without RETURNING: insert, then re-select the
-                // row by the id the insert assigned.
+                // Fallback for backends without RETURNING: insert, then re-select
+                // the row by its primary key.
                 let inserted = executor.execute(sql, params).await?;
+                // A non-integer primary key (a UUID or string) is supplied by the
+                // application, not assigned by the database, so reload by its actual
+                // value. `last_insert_rowid` only matches an integer primary key.
+                let pk_value = match value.primary_key_value() {
+                    pk @ (Value::Text(_) | Value::Uuid(_)) => pk,
+                    _ => Value::Int(inserted.last_insert_rowid),
+                };
                 let projection = Self::COLUMNS
                     .iter()
                     .map(|column| SelectItem::Column {
@@ -433,7 +440,7 @@ pub trait Model: FromRow + ModelHooks + Clone + Send + Sync + 'static {
                 select.filters.push(Expr::binary(
                     Expr::column(Self::TABLE, Self::PRIMARY_KEY),
                     BinaryOp::Eq,
-                    Expr::value(Value::Int(inserted.last_insert_rowid)),
+                    Expr::value(pk_value),
                 ));
                 select.limit = Some(1);
                 let (sql, params) = render_select(executor.dialect(), &select);

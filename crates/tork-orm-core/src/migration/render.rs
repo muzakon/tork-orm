@@ -7,7 +7,7 @@
 //! the input AST and the dialect — which is what lets a migration's rendered DDL be
 //! hashed into a stable checksum.
 
-use crate::dialect::{Dialect, DialectKind, SqlType, predicate_sql, quote_string_literal};
+use crate::dialect::{Dialect, DialectKind, SqlType, predicate_sql};
 use crate::index::IndexDef;
 use crate::error::OrmError;
 
@@ -294,7 +294,7 @@ fn render_column(dialect: &dyn Dialect, column: &ColumnSpec, is_auto_pk: bool, o
                 if index > 0 {
                     out.push_str(", ");
                 }
-                quote_string_literal(variant, out);
+                dialect.escape_string_literal(variant, out);
             }
             out.push_str("))");
         }
@@ -319,7 +319,7 @@ fn render_default(dialect: &dyn Dialect, default: &DefaultValue, out: &mut Strin
         DefaultValue::Bool(value) => out.push_str(dialect.bool_literal(*value)),
         DefaultValue::Int(value) => out.push_str(&value.to_string()),
         DefaultValue::Real(value) => out.push_str(&value.to_string()),
-        DefaultValue::Text(value) => quote_string_literal(value, out),
+        DefaultValue::Text(value) => dialect.escape_string_literal(value, out),
         DefaultValue::CurrentTimestamp => out.push_str("CURRENT_TIMESTAMP"),
         DefaultValue::Null => out.push_str("NULL"),
         DefaultValue::Raw(sql) => out.push_str(sql),

@@ -199,6 +199,17 @@ pub trait Dialect: Send + Sync + 'static {
         }
     }
 
+    /// Writes `value` as a single-quoted SQL string literal, escaped for this
+    /// backend, into `out`.
+    ///
+    /// Used where a value must appear inline in SQL rather than as a bound
+    /// parameter (DDL defaults, enum variants, partial-index predicates). The
+    /// default doubles embedded single quotes; MySQL also escapes backslashes,
+    /// which it treats as an escape character inside string literals.
+    fn escape_string_literal(&self, value: &str, out: &mut String) {
+        writer::quote_string_literal(value, out);
+    }
+
     /// SQL that takes a session-scoped advisory lock serializing migration runs,
     /// or `None` if the backend serializes them another way.
     ///

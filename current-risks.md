@@ -33,7 +33,7 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 ## 6. Hardcoded SQLite `RETURNING` Support (High SQLite Version Hazard)
 - **Risk:** `SqliteDialect::supports_returning` is hardcoded to return `true` ([`sqlite.rs:L58-60`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/dialect/sqlite.rs#L58-L60)).
 - **Vulnerability:** SQLite added support for the `RETURNING` clause in version 3.35.0 (released in 2021). If this ORM is compiled/deployed in environments with older system SQLite libraries (e.g. CentOS 8, RHEL 8, Debian 10, or older container images running musl/glibc), all insert operations will fail immediately with syntax errors.
-- **Status:** Untested and hardcoded. The dialect should query the runtime SQLite library version (e.g., using `rusqlite::version_number()`) to dynamically toggle `RETURNING` support.
+- **Status:** RESOLVED. `SqliteDialect::supports_returning` now returns `rusqlite::version_number() >= 3_035_000`, so a build linking an older system SQLite falls back to a re-select instead of failing every insert. Covered by `returning_support_follows_the_runtime_sqlite_version`.
 
 ## 7. Unimplemented Transaction Options & Standard Isolation Levels (High Risk / Feature Deficit)
 - **Risk:** While standard SQL isolation levels and option builders are commonly needed for multi-dialect production databases, they are **entirely missing** from the codebase:
@@ -73,17 +73,17 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **Vulnerability:** 
   - On **MySQL**, backslash (`\`) acts as an escape character inside single-quoted strings by default. A string containing a backslash followed by a single quote can bypass the doubled-quote escape mechanism, leading to **SQL injection** when rendering inline values (such as in partial index predicates or DDL statements).
   - On **PostgreSQL**, if the connection is configured with `standard_conforming_strings = off`, backslash escapes are enabled, causing a similar SQL injection vulnerability.
-- **Status:** Untested and vulnerable for MySQL/PostgreSQL backends.
+- **Status:** RESOLVED. Inline string escaping is now dialect-aware via `Dialect::escape_string_literal`: MySQL also doubles backslashes (`quote_string_literal_mysql`), closing the backslash-before-quote bypass. PostgreSQL/SQLite keep quote-doubling (Tork assumes the default `standard_conforming_strings = on`). Covered by `mysql_escapes_backslashes_in_string_literals` / `sqlite_does_not_escape_backslashes`.
 
 ## 14. SQL Injection via Unescaped Scalar Function Names (High Security Risk)
 - **Risk:** The SQL expression writer [`writer.rs:L133-143`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/dialect/writer.rs#L133-L143) handles function calls (`Expr::Func`) by rendering the function name verbatim using `self.push_sql(name)`.
 - **Vulnerability:** There is no escaping or quoting applied to the function name itself. If the application dynamically constructs queries using runtime-supplied string values as function names (e.g., dynamic database-side transformations guided by user input), an attacker can supply malicious SQL payloads that bypass filter constructs.
-- **Status:** Untested and vulnerable.
+- **Status:** RESOLVED. `Expr::Func` names are written through `push_function_name`, which keeps only identifier-safe characters (`[A-Za-z0-9_.]`), so a name built from untrusted input is neutralized into a harmless unknown-function token instead of injecting SQL. Covered by `function_names_cannot_inject_sql`.
 
 ## 15. Path Traversal & Arbitrary File Creation in Connection Strings (High Security Risk)
 - **Risk:** The SQLite connection path parsing in [`sqlite.rs:L223-239`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/driver/sqlite.rs#L223-L239) does not sanitize or restrict the parsed database path.
 - **Vulnerability:** If an application allows dynamic database URLs (e.g., in multi-tenant environments where the database name is derived from user input or request headers), a user can supply path traversal components (like `sqlite://../../../../etc/passwd` or `sqlite://var/lib/malicious.db`). SQLite will attempt to create or write to that file location, allowing arbitrary file creation or file corruption.
-- **Status:** Untested and unrestricted.
+- **Status:** RESOLVED. SQLite connection-path parsing rejects `..` (parent-directory) components, so a path derived from untrusted input cannot escape to an arbitrary file; absolute paths chosen by the application are still allowed. Covered by `rejects_parent_directory_traversal_in_the_path`.
 
 ## 16. Concurrent Queries on Transaction Handles (Critical Concurrency Hazard)
 - **Risk:** The transaction wrapper [`PinnedSqlite`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/driver/sqlite.rs#L336-L340) locks and takes (`Option::take`) the inner connection out of the mutex for the duration of a `spawn_blocking` query, returning it only when the query finishes.
@@ -127,7 +127,7 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 ## 21. Non-Integer Primary Keys on Non-`RETURNING` Dialects (High Risk / Bug)
 - **Risk:** If a dialect does not support `RETURNING` statements, `Model::create` executes the insert and then re-selects the row using SQLite's `last_insert_rowid` coerced into a `Value::Int` (implemented in [`model.rs`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/model.rs#L183-L205)).
 - **Bug:** If the table uses a non-integer primary key (like a UUID `TEXT` or a `VARCHAR` string) on a database without `RETURNING`, `last_insert_rowid` will not match the primary key value. The reload step will fetch the wrong row or fail with a `not found` error.
-- **Status:** No tests cover UUID or string-based primary keys on simulated non-`RETURNING` dialects.
+- **Status:** RESOLVED. On a non-`RETURNING` dialect, `Model::create` reloads by the supplied primary-key value when it is non-integer (a UUID or string), instead of `last_insert_rowid` which only matches an integer key. Covered by `create_with_a_string_primary_key_reloads_by_value` (MySQL live test).
 
 ## 25. Column & Table Renaming Data Loss (High Risk)
 - **Risk:** The schema generator does not track renames. If a model name or column name is renamed, the generator interprets this as a `DROP` of the old entity and a `CREATE`/`ADD` of the new one. Applying the generated migration will silently destroy all data in that column or table.

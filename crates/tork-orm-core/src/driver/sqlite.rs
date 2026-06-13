@@ -286,6 +286,20 @@ fn parse_url(url: &str) -> crate::Result<Source> {
     if without_scheme == ":memory:" || without_scheme.is_empty() {
         return Ok(Source::Memory);
     }
+
+    // Reject parent-directory traversal so a database path derived from untrusted
+    // input (a multi-tenant database name, say) cannot escape to an arbitrary file
+    // such as `sqlite://../../etc/passwd`. Absolute paths chosen by the application
+    // are allowed; only `..` components are blocked.
+    let has_traversal = std::path::Path::new(without_scheme)
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir));
+    if has_traversal {
+        return Err(OrmError::configuration(
+            "database path must not contain `..` components",
+        ));
+    }
+
     Ok(Source::File(without_scheme.to_string()))
 }
 
@@ -565,6 +579,16 @@ mod tests {
         // And the pool still serves queries on that single recovered connection.
         let rows = pool.fetch_all("SELECT 1".into(), vec![]).await.unwrap();
         assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn rejects_parent_directory_traversal_in_the_path() {
+        assert!(SqlitePool::new("sqlite://../../etc/passwd", 1).is_err());
+        assert!(SqlitePool::new("../secret.db", 1).is_err());
+        // Ordinary relative, absolute, and in-memory paths are accepted.
+        assert!(SqlitePool::new("app.db", 1).is_ok());
+        assert!(SqlitePool::new("/tmp/tork-test.db", 1).is_ok());
+        assert!(SqlitePool::new(":memory:", 1).is_ok());
     }
 
     #[tokio::test]

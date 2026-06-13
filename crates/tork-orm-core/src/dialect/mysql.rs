@@ -67,6 +67,13 @@ impl Dialect for MySqlDialect {
         65535
     }
 
+    fn escape_string_literal(&self, value: &str, out: &mut String) {
+        // MySQL treats a backslash as an escape character inside single-quoted
+        // strings, so escape it too, or a backslash before a quote could break
+        // out of the literal.
+        crate::dialect::writer::quote_string_literal_mysql(value, out);
+    }
+
     fn acquire_migration_lock_sql(&self, key: i64) -> Option<String> {
         // Named user-level lock, released when the session ends. The 60s timeout
         // bounds how long a starting instance waits for a peer's migration run.
@@ -105,7 +112,7 @@ impl Dialect for MySqlDialect {
                     if index > 0 {
                         out.push_str(", ");
                     }
-                    crate::dialect::quote_string_literal(variant, out);
+                    self.escape_string_literal(variant, out);
                 }
                 out.push(')');
             }
@@ -153,6 +160,37 @@ mod tests {
         let mut out = String::new();
         MySqlDialect::new().map_sql_type(ty, &mut out);
         out
+    }
+
+    #[test]
+    fn mysql_escapes_backslashes_in_string_literals() {
+        // Input: a \ ' b. MySQL must double both the backslash and the quote, so a
+        // backslash cannot escape the doubled quote and break out of the literal.
+        let mut out = String::new();
+        MySqlDialect::new().escape_string_literal("a\\'b", &mut out);
+        assert_eq!(out, "'a\\\\''b'");
+    }
+
+    #[test]
+    fn sqlite_does_not_escape_backslashes() {
+        // SQLite treats backslash as a literal character, so only the quote doubles.
+        let mut out = String::new();
+        crate::dialect::SqliteDialect::new().escape_string_literal("a\\'b", &mut out);
+        assert_eq!(out, "'a\\''b'");
+    }
+
+    #[test]
+    fn function_names_cannot_inject_sql() {
+        use crate::dialect::render_expr;
+        use crate::query::expr::Expr;
+
+        let expr = Expr::func("evil'); DROP TABLE users; --", vec![]);
+        let (sql, _) = render_expr(&MySqlDialect::new(), &expr);
+        // The payload's punctuation is stripped, leaving a harmless (unknown)
+        // function call rather than injected SQL.
+        assert!(!sql.contains('\''), "sql: {sql}");
+        assert!(!sql.contains(';'), "sql: {sql}");
+        assert!(!sql.contains("--"), "sql: {sql}");
     }
 
     #[test]

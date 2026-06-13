@@ -657,3 +657,47 @@ async fn soft_delete_scope_and_restore() {
     let removed = Note::query().with_deleted().hard_delete(&db).await.unwrap();
     assert_eq!(removed, 2);
 }
+
+/// Serializes the tests that share the `my_tokens` table.
+static TOKENS_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[derive(Debug, Clone, Model, PartialEq)]
+#[table(name = "my_tokens")]
+struct Token {
+    #[field(primary_key)]
+    id: String,
+    #[field(varchar(length = 64))]
+    label: String,
+}
+
+#[tokio::test]
+async fn create_with_a_string_primary_key_reloads_by_value() {
+    let _guard = TOKENS_LOCK.lock().await;
+    let db = connect().await;
+    reset(
+        &db,
+        "DROP TABLE IF EXISTS my_tokens",
+        "CREATE TABLE my_tokens (id VARCHAR(64) PRIMARY KEY, label VARCHAR(64) NOT NULL)",
+    )
+    .await;
+
+    // MySQL has no RETURNING. A string primary key is supplied by the app, so
+    // create() must reload by that value, not by LAST_INSERT_ID (which is 0 for a
+    // non-integer key and would fail to find the row).
+    let created = Token::create(
+        &db,
+        &Token {
+            id: "tok_abc".into(),
+            label: "first".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        created,
+        Token {
+            id: "tok_abc".into(),
+            label: "first".into(),
+        }
+    );
+}

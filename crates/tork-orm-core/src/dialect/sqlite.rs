@@ -56,7 +56,10 @@ impl Dialect for SqliteDialect {
     }
 
     fn supports_returning(&self) -> bool {
-        true
+        // `RETURNING` was added in SQLite 3.35.0. The bundled library is newer, but
+        // a build linking an older system SQLite must fall back to a re-select, or
+        // every insert would fail with a syntax error.
+        rusqlite::version_number() >= 3_035_000
     }
 
     fn map_sql_type(&self, ty: SqlType, out: &mut String) {
@@ -91,5 +94,19 @@ impl Dialect for SqliteDialect {
             IsolationLevel::Immediate => "BEGIN IMMEDIATE".to_string(),
             IsolationLevel::Exclusive => "BEGIN EXCLUSIVE".to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn returning_support_follows_the_runtime_sqlite_version() {
+        // RETURNING needs SQLite 3.35.0+; the bundled library is well past that, so
+        // it is reported as supported, matching the runtime version.
+        let supported = SqliteDialect::new().supports_returning();
+        assert_eq!(supported, rusqlite::version_number() >= 3_035_000);
+        assert!(supported, "the bundled SQLite should support RETURNING");
     }
 }
