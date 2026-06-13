@@ -1,0 +1,38 @@
+[package]
+name = "ecommerce"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "A complex multi-vendor e-commerce schema modeled with the Tork ORM, with production-readiness tests (migrations, constraints, transactions, locking, security)."
+
+# Intentionally no `[package.metadata.tork] dialect = "..."`: the schema uses JSON
+# columns, so it stays dialect-neutral and runs against SQLite, PostgreSQL, or MySQL.
+
+# Migration tooling config, read by the `tork-orm` CLI and the `generate` binary.
+[package.metadata.tork.migrations]
+dir                  = "migrations"
+file_template        = "{rev}_{slug}"
+revision_style       = "sequence"
+truncate_slug_length = 40
+
+[dependencies]
+tork-orm = { path = "../../crates/tork-orm", default-features = false, features = ["sqlite", "migrations"] }
+time = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[features]
+default = []
+postgres = ["tork-orm/postgres"]
+mysql = ["tork-orm/mysql"]
+
+# App-embedded `migrate generate`: diffs the registered models against a database
+# and writes a migration SQL file. The standalone `tork-orm` CLI cannot see the
+# Rust models, so generation lives here. Everything else (up/down/status/create) is
+# driven by the `tork-orm` CLI.
+[[bin]]
+name = "generate"
+path = "src/bin/generate.rs"

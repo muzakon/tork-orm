@@ -47,7 +47,7 @@ pub use executor::Executor;
 pub use index::{IndexColumn, IndexDef, NullsOrder};
 #[cfg(feature = "migrations")]
 pub use registry::{registered_models, ModelSchemaEntry, TableSchema};
-pub use model::{ColumnDef, ColumnDefault, ForeignKeyDef, FromRow, Model, ModelHooks};
+pub use model::{ColumnDef, ColumnDefault, ForeignKeyAction, ForeignKeyDef, FromRow, Model, ModelHooks};
 pub use preload::{Preloaded, Preloader};
 pub use query::ast::{Cte, CteQuery, Join, JoinKind, LockClause, LockStrength, LockWait, OrderItem, SelectItem, SelectStatement, UnionStatement, WithClause};
 pub use query::UnionQuery;

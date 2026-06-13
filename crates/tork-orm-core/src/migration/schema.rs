@@ -255,6 +255,13 @@ impl CreateTable<'_, '_> {
         self
     }
 
+    /// Adds a table-level `CHECK (...)` constraint. The expression is rendered
+    /// verbatim, so write it in SQL: `.check("price_cents >= 0")`.
+    pub fn check(mut self, expression: impl Into<String>) -> Self {
+        self.def.checks.push(expression.into());
+        self
+    }
+
     /// Adds `created_at` and `updated_at` timestamp columns defaulting to the
     /// current time.
     pub fn timestamps(mut self) -> Self {
@@ -663,6 +670,20 @@ impl Column {
     /// Sets the type to a binary blob.
     pub fn blob(mut self) -> Self {
         self.spec.ty = SqlType::Blob;
+        self
+    }
+
+    /// Sets the type to a JSON document (`JSONB` on PostgreSQL, `JSON` on MySQL,
+    /// `TEXT` on SQLite).
+    pub fn json(mut self) -> Self {
+        self.spec.ty = SqlType::Json;
+        self
+    }
+
+    /// Sets the type to a UUID (`UUID` on PostgreSQL, `CHAR(36)` on MySQL,
+    /// `TEXT` on SQLite).
+    pub fn uuid(mut self) -> Self {
+        self.spec.ty = SqlType::Uuid;
         self
     }
 

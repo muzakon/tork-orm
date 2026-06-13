@@ -30,6 +30,8 @@ struct TableArgs {
     /// `hooks` suppresses the generated empty `ModelHooks` impl so the user can
     /// provide their own.
     hooks: bool,
+    /// Table-level `CHECK (...)` expressions from `#[table(check = "...")]`.
+    checks: Vec<String>,
 }
 
 /// One entry of `#[table(indexes = [...])]`.
@@ -87,6 +89,11 @@ impl Parse for TableArgs {
                     args.indexes = entries.into_iter().collect();
                 }
                 "hooks" => args.hooks = true,
+                "check" => {
+                    input.parse::<Token![=]>()?;
+                    let lit: LitStr = input.parse()?;
+                    args.checks.push(lit.value());
+                }
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
@@ -369,6 +376,10 @@ struct FieldArgs {
     index: Option<bool>,
     varchar_len: Option<u32>,
     foreign_key: Option<Path>,
+    /// `ON DELETE` / `ON UPDATE` referential actions, as `ForeignKeyAction` variant
+    /// identifiers (validated at parse time).
+    on_delete: Option<Ident>,
+    on_update: Option<Ident>,
     column: Option<String>,
     /// A database-side default; the field is then omitted from `INSERT`.
     default: Option<FieldDefault>,
@@ -440,6 +451,14 @@ impl Parse for FieldArgs {
                 "foreign_key" => {
                     input.parse::<Token![=]>()?;
                     args.foreign_key = Some(input.parse()?);
+                }
+                "on_delete" => {
+                    input.parse::<Token![=]>()?;
+                    args.on_delete = Some(parse_referential_action(input)?);
+                }
+                "on_update" => {
+                    input.parse::<Token![=]>()?;
+                    args.on_update = Some(parse_referential_action(input)?);
                 }
                 "column" => {
                     input.parse::<Token![=]>()?;
@@ -654,6 +673,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             }
         };
 
+        let on_delete = referential_action_tokens(&krate, args.on_delete.as_ref());
+        let on_update = referential_action_tokens(&krate, args.on_update.as_ref());
         let foreign_key = match &args.foreign_key {
             Some(path) => {
                 let (ty_path, column) = split_foreign_key(path)?;
@@ -661,6 +682,8 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 quote!(::core::option::Option::Some(#krate::ForeignKeyDef {
                     table: <#ty_path as #krate::Model>::TABLE,
                     column: #column_lit,
+                    on_delete: #on_delete,
+                    on_update: #on_update,
                 }))
             }
             None => quote!(::core::option::Option::None),
@@ -843,6 +866,14 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
         },
         None => quote!(),
     };
+    let checks_const = if table_args.checks.is_empty() {
+        quote!()
+    } else {
+        let checks = &table_args.checks;
+        quote! {
+            const CHECKS: &'static [&'static str] = &[#(#checks),*];
+        }
+    };
     let version_items = match &version_field {
         Some((field, column)) => quote! {
             const VERSION: ::core::option::Option<&'static str> =
@@ -886,6 +917,7 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
                 #(#column_defs),*
             ];
             const PRIMARY_KEY: &'static str = #pk_column;
+            #checks_const
             #updated_at_const
             #deleted_at_const
             #version_items
@@ -1041,6 +1073,38 @@ fn auto_index_name(table: &str, columns: &[String], unique: bool) -> String {
     }
     name.push_str(if unique { "_key" } else { "_idx" });
     name
+}
+
+/// Parses a referential-action string (`"cascade"`, `"set_null"`, `"restrict"`,
+/// `"set_default"`, `"no_action"`) into the matching `ForeignKeyAction` variant.
+fn parse_referential_action(input: ParseStream) -> syn::Result<Ident> {
+    let lit: LitStr = input.parse()?;
+    let variant = match lit.value().as_str() {
+        "cascade" => "Cascade",
+        "set_null" => "SetNull",
+        "restrict" => "Restrict",
+        "set_default" => "SetDefault",
+        "no_action" => "NoAction",
+        other => {
+            return Err(syn::Error::new(
+                lit.span(),
+                format!(
+                    "unknown referential action `{other}` (expected `cascade`, `set_null`, \
+                     `restrict`, `set_default`, or `no_action`)"
+                ),
+            ));
+        }
+    };
+    Ok(Ident::new(variant, lit.span()))
+}
+
+/// Builds the `ForeignKeyAction` expression for an optional parsed variant,
+/// defaulting to `NoAction`.
+fn referential_action_tokens(krate: &TokenStream2, variant: Option<&Ident>) -> TokenStream2 {
+    match variant {
+        Some(ident) => quote!(#krate::ForeignKeyAction::#ident),
+        None => quote!(#krate::ForeignKeyAction::NoAction),
+    }
 }
 
 /// Splits a `Type::column` foreign-key path into the referenced type path and the

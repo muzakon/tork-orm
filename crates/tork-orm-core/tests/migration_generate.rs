@@ -8,7 +8,7 @@ use tork_orm_core::{ColumnDef, Database, SqlType};
 use tork_orm_core::registry::TableSchema;
 
 fn schema(table: &'static str, columns: Vec<ColumnDef>) -> TableSchema {
-    TableSchema { table, columns, indexes: vec![] }
+    TableSchema { table, columns, indexes: vec![], checks: vec![] }
 }
 
 fn col(name: &'static str, sql_type: SqlType, nullable: bool) -> ColumnDef {

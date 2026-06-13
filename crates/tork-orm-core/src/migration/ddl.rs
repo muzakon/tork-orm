@@ -8,33 +8,9 @@
 use crate::dialect::SqlType;
 use crate::index::IndexDef;
 
-/// The action a foreign key takes when the referenced row changes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ForeignKeyAction {
-    /// `NO ACTION` (the default).
-    NoAction,
-    /// `RESTRICT`.
-    Restrict,
-    /// `CASCADE`.
-    Cascade,
-    /// `SET NULL`.
-    SetNull,
-    /// `SET DEFAULT`.
-    SetDefault,
-}
-
-impl ForeignKeyAction {
-    /// Returns the SQL keyword, or `None` for the default `NO ACTION`.
-    pub fn as_sql(self) -> Option<&'static str> {
-        match self {
-            ForeignKeyAction::NoAction => None,
-            ForeignKeyAction::Restrict => Some("RESTRICT"),
-            ForeignKeyAction::Cascade => Some("CASCADE"),
-            ForeignKeyAction::SetNull => Some("SET NULL"),
-            ForeignKeyAction::SetDefault => Some("SET DEFAULT"),
-        }
-    }
-}
+// `ForeignKeyAction` lives in `model` (always compiled) so a `ForeignKeyDef` can
+// carry it; re-exported here for migration code that builds foreign keys.
+pub use crate::model::ForeignKeyAction;
 
 /// A column default value.
 ///
@@ -155,6 +131,8 @@ pub struct TableDef {
     pub primary_key: Vec<String>,
     /// Foreign key constraints.
     pub foreign_keys: Vec<ForeignKeySpec>,
+    /// Table-level `CHECK (...)` constraint expressions, rendered verbatim.
+    pub checks: Vec<String>,
     /// Indexes created alongside the table.
     pub indexes: Vec<IndexDef>,
 }
@@ -168,6 +146,7 @@ impl TableDef {
             columns: Vec::new(),
             primary_key: Vec::new(),
             foreign_keys: Vec::new(),
+            checks: Vec::new(),
             indexes: Vec::new(),
         }
     }

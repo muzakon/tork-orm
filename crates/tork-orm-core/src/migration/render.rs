@@ -52,6 +52,13 @@ pub fn create_table(dialect: &dyn Dialect, table: &TableDef) -> crate::Result<Ve
         render_foreign_key(dialect, foreign_key, &mut sql);
     }
 
+    // Table-level CHECK constraints, rendered verbatim (the caller owns the SQL).
+    for check in &table.checks {
+        sql.push_str(", CHECK (");
+        sql.push_str(check);
+        sql.push(')');
+    }
+
     sql.push(')');
     statements.push(sql);
 

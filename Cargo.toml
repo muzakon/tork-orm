@@ -13,6 +13,7 @@ members = [
     "crates/tork-orm-core",
     "crates/tork-orm-macros",
     "examples/orm_api",
+    "examples/ecommerce",
 ]
 
 # Shared metadata inherited by every crate via `field.workspace = true`.

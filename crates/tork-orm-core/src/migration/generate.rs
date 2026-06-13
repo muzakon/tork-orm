@@ -18,7 +18,7 @@ use crate::executor::Executor;
 use crate::registry::{registered_models, TableSchema};
 
 use super::ddl::{
-    AlterAction, AlterTable, ColumnSpec, DefaultValue, ForeignKeyAction, ForeignKeySpec, TableDef,
+    AlterAction, AlterTable, ColumnSpec, DefaultValue, ForeignKeySpec, TableDef,
 };
 use super::introspect::ExistingColumn;
 use super::{files, introspect, render};
@@ -293,12 +293,13 @@ fn table_def_from_schema(schema: &TableSchema) -> TableDef {
                 columns: vec![column.name.to_string()],
                 ref_table: foreign_key.table.to_string(),
                 ref_columns: vec![foreign_key.column.to_string()],
-                on_delete: ForeignKeyAction::NoAction,
-                on_update: ForeignKeyAction::NoAction,
+                on_delete: foreign_key.on_delete,
+                on_update: foreign_key.on_update,
             });
         }
     }
     def.indexes = schema.indexes.clone();
+    def.checks = schema.checks.iter().map(|check| check.to_string()).collect();
     def
 }
 

@@ -16,6 +16,39 @@ use crate::query::write::{Assignment, DeleteStatement, InsertStatement, OnConfli
 use crate::row::Row;
 use crate::value::Value;
 
+/// The action a foreign key takes when the referenced row changes.
+///
+/// Lives here (rather than in the feature-gated `migration` module) so it can be
+/// recorded on a [`ForeignKeyDef`] that is always compiled; `migration` re-exports
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ForeignKeyAction {
+    /// `NO ACTION` (the default).
+    #[default]
+    NoAction,
+    /// `RESTRICT`.
+    Restrict,
+    /// `CASCADE`.
+    Cascade,
+    /// `SET NULL`.
+    SetNull,
+    /// `SET DEFAULT`.
+    SetDefault,
+}
+
+impl ForeignKeyAction {
+    /// Returns the SQL keyword, or `None` for the default `NO ACTION`.
+    pub fn as_sql(self) -> Option<&'static str> {
+        match self {
+            ForeignKeyAction::NoAction => None,
+            ForeignKeyAction::Restrict => Some("RESTRICT"),
+            ForeignKeyAction::Cascade => Some("CASCADE"),
+            ForeignKeyAction::SetNull => Some("SET NULL"),
+            ForeignKeyAction::SetDefault => Some("SET DEFAULT"),
+        }
+    }
+}
+
 /// A foreign key reference recorded on a column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ForeignKeyDef {
@@ -23,6 +56,10 @@ pub struct ForeignKeyDef {
     pub table: &'static str,
     /// The referenced column in that table.
     pub column: &'static str,
+    /// The `ON DELETE` action.
+    pub on_delete: ForeignKeyAction,
+    /// The `ON UPDATE` action.
+    pub on_update: ForeignKeyAction,
 }
 
 /// A database-side default value declared on a model column.
@@ -164,6 +201,10 @@ pub trait Model: FromRow + ModelHooks + Clone + Send + Sync + 'static {
     /// non-null by default.
     const DELETED_AT: Option<&'static str> = None;
 
+    /// Table-level `CHECK (...)` constraint expressions declared with
+    /// `#[table(check = "...")]`. Empty by default.
+    const CHECKS: &'static [&'static str] = &[];
+
     /// The optimistic-lock version column, if the model declares a
     /// `#[field(version)]` column. `None` otherwise.
     ///
@@ -242,6 +283,7 @@ pub trait Model: FromRow + ModelHooks + Clone + Send + Sync + 'static {
             table: Self::TABLE,
             columns: Self::COLUMNS.to_vec(),
             indexes: Self::indexes(),
+            checks: Self::CHECKS.to_vec(),
         }
     }
 

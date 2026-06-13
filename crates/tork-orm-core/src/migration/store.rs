@@ -49,6 +49,7 @@ pub(crate) fn table_def(table: &str) -> TableDef {
         ],
         primary_key: Vec::new(),
         foreign_keys: Vec::new(),
+        checks: Vec::new(),
         indexes: Vec::new(),
     }
 }

@@ -25,6 +25,8 @@ pub struct TableSchema {
     pub columns: Vec<ColumnDef>,
     /// The declared indexes.
     pub indexes: Vec<IndexDef>,
+    /// Table-level `CHECK (...)` constraint expressions.
+    pub checks: Vec<&'static str>,
 }
 
 /// A registry entry contributed by one model.

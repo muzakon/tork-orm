@@ -56,6 +56,37 @@ pub struct Post {
 }
 ```
 
+#### Referential Actions
+
+Add `on_delete` and `on_update` to control what happens when the referenced row is removed or its key changes. The values are `cascade`, `set_null`, `restrict`, `set_default`, and `no_action` (the default). These flow into the migration generated from the model.
+
+```rust
+#[field(foreign_key = User::id, on_delete = "cascade")]
+pub user_id: i64,
+
+// A nullable foreign key that becomes NULL when the parent is deleted.
+#[field(foreign_key = Category::id, on_delete = "set_null")]
+pub category_id: Option<i64>,
+```
+
+### CHECK Constraints
+
+Declare table-level `CHECK` constraints with `#[table(check = "...")]` (repeat it for several). The expression is raw SQL over the table's columns and is emitted into the generated migration.
+
+```rust
+#[derive(Debug, Clone, Model)]
+#[table(name = "order_items",
+    check = "quantity > 0",
+    check = "unit_price_cents >= 0",
+)]
+pub struct OrderItem {
+    #[field(primary_key, auto)]
+    pub id: i64,
+    pub quantity: i32,
+    pub unit_price_cents: i64,
+}
+```
+
 ## Custom Field Types (`BindValue` and `FromValue`)
 
 If you want to use custom types (like enums or complex structs) as model fields, you must implement the `BindValue` and `FromValue` traits. These traits tell Tork ORM how to serialize the type to a database-compatible `Value` and deserialize it back.
