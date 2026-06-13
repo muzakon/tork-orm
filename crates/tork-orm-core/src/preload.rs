@@ -375,14 +375,16 @@ impl<M: Model> Preloader<M> {
 /// an ordinary column.
 fn column_value<M: Model>(model: &M, column: &str) -> Option<Value> {
     if column == M::PRIMARY_KEY {
-        Some(model.primary_key_value())
-    } else {
-        model
-            .insert_values()
-            .into_iter()
-            .find(|(name, _)| *name == column)
-            .map(|(_, value)| value)
+        return Some(model.primary_key_value());
     }
+    // `column_values` includes auto/DB-defaulted columns, so a join key that is an
+    // auto column (e.g. an auto-increment `user_number`) still resolves on a loaded
+    // parent — unlike `insert_values`, which omits them.
+    model
+        .column_values()
+        .into_iter()
+        .find(|(name, _)| *name == column)
+        .map(|(_, value)| value)
 }
 
 /// Builds a stable string key for grouping by a value. Join keys are integers or
@@ -395,7 +397,10 @@ fn value_key(value: &Value) -> String {
         Value::Real(r) => format!("r:{r}"),
         Value::Text(s) => format!("t:{s}"),
         Value::Blob(bytes) => format!("x:{bytes:?}"),
-        Value::Timestamp(ts) => format!("ts:{ts:?}"),
+        // Key by the absolute instant (nanoseconds since the Unix epoch), not the
+        // debug rendering, so two equal moments stored with different UTC offsets
+        // (`...Z` vs `...+00:00`) group together instead of missing each other.
+        Value::Timestamp(ts) => format!("ts:{}", ts.unix_timestamp_nanos()),
         Value::Uuid(u) => format!("u:{u}"),
         Value::Json(j) => format!("j:{j}"),
         Value::Array(items) => format!("a:{items:?}"),
@@ -405,4 +410,31 @@ fn value_key(value: &Value) -> String {
 /// An empty boxed child list for a parent with no related rows.
 fn empty_children<C: Send + Sync + 'static>() -> Box<dyn Any + Send + Sync> {
     Box::new(Vec::<C>::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::{OffsetDateTime, UtcOffset};
+
+    #[test]
+    fn timestamp_keys_are_offset_independent() {
+        // The same instant stored with different UTC offsets must group together.
+        let instant = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let shifted = instant.to_offset(UtcOffset::from_hms(5, 30, 0).unwrap());
+
+        assert_ne!(instant.offset(), shifted.offset(), "offsets must differ");
+        assert_eq!(
+            value_key(&Value::Timestamp(instant)),
+            value_key(&Value::Timestamp(shifted)),
+            "equal instants must produce the same grouping key"
+        );
+    }
+
+    #[test]
+    fn distinct_instants_get_distinct_keys() {
+        let a = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let b = OffsetDateTime::from_unix_timestamp(1_700_000_001).unwrap();
+        assert_ne!(value_key(&Value::Timestamp(a)), value_key(&Value::Timestamp(b)));
+    }
 }

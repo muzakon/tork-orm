@@ -108,6 +108,43 @@ fn insert_values_skip_auto_primary_key() {
     assert_eq!(values[3].1, Value::Text("bobby".into()));
 }
 
+#[derive(Debug, Clone, Model)]
+#[table(name = "widgets")]
+struct Widget {
+    #[field(primary_key, auto)]
+    id: i64,
+    // A non-primary-key auto column (database-assigned), e.g. a sequence number.
+    #[field(auto)]
+    serial: i64,
+    name: String,
+}
+
+#[test]
+fn column_values_includes_auto_columns() {
+    let widget = Widget {
+        id: 7,
+        serial: 100,
+        name: "gadget".into(),
+    };
+
+    // `column_values` reports every column, including the auto ones...
+    let columns: Vec<&str> = widget.column_values().iter().map(|(n, _)| *n).collect();
+    assert_eq!(columns, ["id", "serial", "name"]);
+
+    // ...while `insert_values` still omits the auto columns for the database to fill.
+    let inserts: Vec<&str> = widget.insert_values().iter().map(|(n, _)| *n).collect();
+    assert_eq!(inserts, ["name"]);
+
+    // So a relation join key on the auto `serial` column resolves on a loaded row
+    // (risk #26), instead of returning None from `insert_values`.
+    let serial = widget
+        .column_values()
+        .into_iter()
+        .find(|(name, _)| *name == "serial")
+        .map(|(_, value)| value);
+    assert_eq!(serial, Some(Value::Int(100)));
+}
+
 #[test]
 fn primary_key_value_reads_the_pk_field() {
     let user = User {

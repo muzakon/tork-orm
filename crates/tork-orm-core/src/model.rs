@@ -219,6 +219,20 @@ pub trait Model: FromRow + ModelHooks + Clone + Send + Sync + 'static {
     /// so the database fills them in.
     fn insert_values(&self) -> Vec<(&'static str, Value)>;
 
+    /// Returns every column's current value, including auto-assigned and
+    /// DB-defaulted columns (unlike [`insert_values`](Model::insert_values)).
+    ///
+    /// Used to read a relation join key by column name, which may be an auto column
+    /// on a loaded model. `#[derive(Model)]` overrides this with the full column
+    /// set; the default covers the insert columns plus the primary key, which is
+    /// enough for hand-written impls whose join key is the primary key or a plain
+    /// (non-auto) column.
+    fn column_values(&self) -> Vec<(&'static str, Value)> {
+        let mut values = self.insert_values();
+        values.push((Self::PRIMARY_KEY, self.primary_key_value()));
+        values
+    }
+
     /// Returns the value of the primary key column for this instance.
     fn primary_key_value(&self) -> Value;
 

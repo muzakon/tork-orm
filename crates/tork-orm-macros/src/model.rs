@@ -552,6 +552,9 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
     let mut column_consts: Vec<TokenStream2> = Vec::new();
     let mut from_row_fields: Vec<TokenStream2> = Vec::new();
     let mut insert_entries: Vec<TokenStream2> = Vec::new();
+    // Every column's current value (including auto/DB-defaulted ones), for reading a
+    // join key that happens to be an auto column.
+    let mut all_entries: Vec<TokenStream2> = Vec::new();
     // Statements that fill client-side `default_with` fields when they are unset.
     let mut client_default_stmts: Vec<TokenStream2> = Vec::new();
     let mut primary_key: Option<(Ident, String)> = None;
@@ -796,6 +799,11 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
 
         from_row_fields.push(quote!(#field_ident: row.get(#column_name)?));
 
+        // Every column, for `column_values` (used to read a join key by name).
+        all_entries.push(quote!(
+            (#column_name, #krate::BindValue::to_value(&self.#field_ident))
+        ));
+
         // Auto-assigned columns and DB-defaulted columns are filled by the database,
         // so they are not written on insert.
         if !auto_flag && !has_default {
@@ -932,6 +940,12 @@ fn expand_model(input: DeriveInput) -> syn::Result<TokenStream2> {
             fn insert_values(&self) -> ::std::vec::Vec<(&'static str, #krate::Value)> {
                 ::std::vec![
                     #(#insert_entries),*
+                ]
+            }
+
+            fn column_values(&self) -> ::std::vec::Vec<(&'static str, #krate::Value)> {
+                ::std::vec![
+                    #(#all_entries),*
                 ]
             }
 

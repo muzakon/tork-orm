@@ -350,7 +350,7 @@ fn read_value(raw: ValueRef<'_>) -> crate::Result<Value> {
 fn fetch_all(conn: &mut Connection, sql: &str, params: &[Value]) -> crate::Result<Vec<Row>> {
     let mut statement = conn
         .prepare_cached(sql)
-        .map_err(|e| OrmError::query(format!("cannot prepare `{sql}`")).with_source(e))?;
+        .map_err(|e| OrmError::query("failed to prepare statement").with_source(e))?;
 
     let column_names: Arc<[String]> = statement
         .column_names()
@@ -391,7 +391,7 @@ fn execute_batch(conn: &mut Connection, sql: &str) -> crate::Result<()> {
 fn execute(conn: &mut Connection, sql: &str, params: &[Value]) -> crate::Result<ExecuteResult> {
     let affected = conn
         .prepare_cached(sql)
-        .map_err(|e| OrmError::query(format!("cannot prepare `{sql}`")).with_source(e))?
+        .map_err(|e| OrmError::query("failed to prepare statement").with_source(e))?
         .execute(rusqlite::params_from_iter(params.iter()))
         .map_err(|e| OrmError::query("statement execution failed").with_source(e))?;
 
@@ -609,5 +609,28 @@ mod tests {
         // The pool still serves queries on the same connection.
         let rows = pool.fetch_all("SELECT 1".into(), vec![]).await.unwrap();
         assert_eq!(rows.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn query_errors_do_not_embed_the_raw_sql() {
+        // A failing statement must not put the verbatim SQL (table/column names,
+        // query shape) into the error text, which could surface schema details.
+        let pool = SqlitePool::new(":memory:", 1).unwrap();
+
+        let error = pool
+            .fetch_all("SELECT secret_column FROM secret_table".into(), vec![])
+            .await
+            .expect_err("a missing table should error");
+
+        assert!(
+            !error.message().contains("secret_table")
+                && !error.message().contains("secret_column"),
+            "the error message leaked SQL: {}",
+            error.message()
+        );
+        assert!(
+            !error.to_string().contains("secret_table"),
+            "the error display leaked SQL: {error}"
+        );
     }
 }

@@ -133,11 +133,11 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **Risk:** The schema generator does not track renames. If a model name or column name is renamed, the generator interprets this as a `DROP` of the old entity and a `CREATE`/`ADD` of the new one. Applying the generated migration will silently destroy all data in that column or table.
 - **Status:** Untested for safety. No warning comments or safety checks are generated to prevent data-destroying drop operations caused by renaming.
 
-## 26. Preloader Join Key Auto-Column Exclusion Bug (Medium Risk / Functional Failure)
+## 26. [x] Preloader Join Key Auto-Column Exclusion Bug (Medium Risk / Functional Failure)
 - **Risk:** The preloader extracts parent model values for relationship matching via `column_value(parent, from_column)` ([`preload.rs:L313-325`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/preload.rs#L313-L325)). If the join key is not the primary key, it looks up the value in `parent.insert_values()`.
 - **Bug:** `Model::insert_values` excludes all fields marked with `auto` (auto-increment columns or fields with DB-assigned defaults) so the database can assign them on creation. If a relation links parent/child records using a non-primary key auto-increment column or auto-timestamp column (e.g. `user_number`), `column_value` will return `None`.
 - **Consequence:** Preloading a relation on any database-assigned columns will silently fail to link parents and children, returning empty child lists in memory.
-- **Status:** Untested and broken.
+- **Status:** RESOLVED. `Model::column_values()` reports every column's current value, including auto/DB-assigned ones (the derive generates the full set; the trait default covers the insert columns plus the primary key). The preloader's `column_value` now reads through `column_values`, so a join key on an auto column resolves on a loaded parent instead of returning `None`. Covered by `column_values_includes_auto_columns`.
 
 ## 27. Network File System (EFS/Cloud Filestore) SQLite WAL Lock Corruption (Medium Risk)
 - **Risk:** Deploying SQLite on serverless containers using network-attached mounts (such as AWS EFS or GCP Cloud Filestore) to persist the database file.
@@ -149,20 +149,20 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **Vulnerability:** In serverless environments, containers spin up and shut down on demand (auto-scaling). If the ORM is extended to use a centralized database (such as PostgreSQL), a sudden surge in traffic can spin up 100 containers. If each container opens `max_connections = 10`, the database will receive 1,000 connections simultaneously, easily saturating the backend connection limits and failing incoming queries.
 - **Status:** No centralized connection proxy or serverless database adapter integration.
 
-## 29. Timezone-Mismatch Key Failures in Preloading (Medium Risk)
+## 29. [x] Timezone-Mismatch Key Failures in Preloading (Medium Risk)
 - **Risk:** The preloader converts join keys to string representation using debug rendering [`preload.rs:L329-339`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/preload.rs#L329-L339) (e.g. `ts:OffsetDateTime`).
 - **Bug:** If parent and child records are inserted with different timezone offsets representing the exact same moment (e.g. UTC `Z` vs `+00:00`), their string representation keys will differ (e.g., `ts:2026-06-11T20:00:00Z` vs `ts:2026-06-11T20:00:00+00:00`). The preloader will fail to stitch them together, returning empty child vectors.
-- **Status:** Untested and vulnerable to timezone offset variations.
+- **Status:** RESOLVED. The timestamp grouping key is now the absolute instant (`OffsetDateTime::unix_timestamp_nanos()`), not the offset-bearing debug rendering, so two equal moments stored with different UTC offsets produce the same key and group together. Covered by `preload::tests::timestamp_keys_are_offset_independent`.
 
-## 30. Database Schema Information Disclosure (Medium Security Risk)
+## 30. [x] Database Schema Information Disclosure (Medium Security Risk)
 - **Risk:** Database query and statement compilation errors include the full raw SQL text in the returned error string ([`sqlite.rs:L282`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/driver/sqlite.rs#L282)).
 - **Vulnerability:** When integrated with the Tork web framework, these database errors are converted to HTTP `500` errors. If the framework propagates these error messages to client HTTP responses, it will leak internal database structures, table names, column names, and query patterns to public users.
-- **Status:** Untested for sensitive schema filtering in production mode.
+- **Status:** RESOLVED. The prepare/query error messages no longer embed the verbatim SQL (they read `failed to prepare statement`); the driver error is kept only on the error `source` for debugging, and `OrmError`'s `Display` renders just `kind: message` without the source. So the query shape (table/column names, joins) is not in the error text. Defense-in-depth: the Tork framework already redacts `5xx` bodies to a generic message. Covered by `query_errors_do_not_embed_the_raw_sql`.
 
-## 31. Fragile DateTime/Timestamp String Parsing (Medium Risk)
+## 31. [x] Fragile DateTime/Timestamp String Parsing (Medium Risk)
 - **Risk:** The core parsing logic for date-times ([`value.rs:L210-219`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/value.rs#L210-L219)) strictly expects date strings to follow RFC 3339 formatting.
 - **Bug:** Standard database date formats (such as SQLite's default `YYYY-MM-DD HH:MM:SS` format or MySQL's timestamp syntax) will fail to parse and immediately crash with a runtime conversion error.
-- **Status:** Untested against non-RFC-3339 database text values.
+- **Status:** RESOLVED. `parse_timestamp_text` accepts RFC 3339 first and then falls back to the `YYYY-MM-DD HH:MM:SS` form (SQLite/MySQL default), assuming UTC for the offset-less form, so common database text timestamps parse instead of erroring.
 
 ## 32. [x] Missing Primitive Integer Mappings (Medium Risk)
 - **Risk:** The `BindValue` and `FromValue` traits ([`value.rs`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/value.rs)) were only implemented for `bool`, `i32`, `i64`, `f64`, `String`, `Vec<u8>`, and `OffsetDateTime`.
@@ -210,7 +210,7 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 ## 41. [x] Missing `uuid::Uuid` Field Binding (Medium Risk / DX Gap)
 - **Risk:** Although `uuid` is a workspace dependency (used to generate migration filenames), the ORM does not implement `BindValue` or `FromValue` for the `uuid::Uuid` type.
 - **Vulnerability:** Structs containing `uuid::Uuid` fields fail to compile under the `Model` derive. Developers are forced to store UUIDs as `String` / `TEXT` columns and manually format them at runtime.
-- **Status:** Unsupported and untested.
+- **Status:** RESOLVED. `BindValue`/`FromValue` are implemented for `uuid::Uuid` (`value.rs`): it binds to `Value::Uuid`, and reads from `Value::Uuid` or a `Value::Text` fallback (for backends without a native UUID type), so `uuid::Uuid` model fields work under the derive.
 
 ## 42. [x] Unbounded Preload Collection Growth (Medium Risk / Memory Hazard)
 - **Risk:** The `Relation` preloading API did not expose a `.limit(N)` builder method for preloading child datasets (defined in [`relation.rs`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/relation.rs)).
@@ -237,7 +237,7 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 ## 47. [x] Lack of Model Validation Hook/Lifecycle Integration (Medium Risk)
 - **Risk:** While the workspace includes the `garde` validation library, the ORM does not define any lifecycle hooks (such as `before_save`, `before_create`, or `before_update`) on the `Model` trait to trigger validations.
 - **Vulnerability:** Developers must manually remember to call validation checks before calling database methods. If forgotten, invalid or corrupted input data can be persisted directly to the database without verification.
-- **Status:** Unimplemented.
+- **Status:** RESOLVED. The `ModelHooks` trait (`model.rs`) defines `before_create`/`after_create`/`before_save`/`after_save`, invoked by `Model::create`/`save`. A `before_create`/`before_save` hook can run `garde` validation (or any check) and return an error to abort the write, and can mutate the row (set timestamps, a client-side UUID). Covered by the lifecycle/hooks tests.
 
 ## 48. [x] Silent In-Memory Database Schema & Data Loss (Medium Risk)
 - **Risk:** In SQLite, an in-memory database (`:memory:`) is entirely tied to the lifecycle of the active connection handles.
@@ -262,10 +262,10 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **Vulnerability:** If an application generates schema definitions dynamically using untrusted user inputs to set default column values, this leads to DDL SQL injection.
 - **Status:** Untested for input sanitization.
 
-## 53. Invalid `VARCHAR(0)` Spec Generation (Low-Medium Risk)
+## 53. [x] Invalid `VARCHAR(0)` Spec Generation (Low-Medium Risk)
 - **Risk:** The `Model` derive macro parses `varchar(length = N)` but does not validate if `N > 0`.
 - **Bug:** Declaring a field with `#[field(varchar(length = 0))]` compiles successfully but generates invalid DDL specifications (`VARCHAR(0)`), causing database schema creation errors at runtime.
-- **Status:** Untested.
+- **Status:** RESOLVED. The `Model` derive rejects `varchar(length = 0)` at compile time with `varchar length must be > 0` (`tork-orm-macros/src/model.rs`), so an invalid `VARCHAR(0)` spec can no longer reach DDL generation.
 
 ---
 
