@@ -100,3 +100,21 @@ async fn query_inside_transaction_is_visible_to_itself() {
     // After rollback the original value is restored.
     assert_eq!(read_n(&db).await, 0);
 }
+
+#[tokio::test]
+async fn concurrent_queries_on_a_transaction_serialize() {
+    let db = setup().await;
+    let mut tx = db.begin().await.unwrap();
+
+    // Two queries issued concurrently on the same transaction must serialize on
+    // the single pinned connection rather than the second failing with
+    // "pinned connection is already in use".
+    let (a, b) = tokio::join!(
+        tx.fetch_all("SELECT n FROM counters WHERE id = 1".into(), vec![]),
+        tx.fetch_all("SELECT n FROM counters WHERE id = 1".into(), vec![]),
+    );
+    assert!(a.is_ok(), "first concurrent query failed: {a:?}");
+    assert!(b.is_ok(), "second concurrent query failed: {b:?}");
+
+    tx.commit().await.unwrap();
+}

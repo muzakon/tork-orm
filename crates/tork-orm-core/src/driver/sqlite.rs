@@ -197,6 +197,7 @@ impl SqlitePool {
         Ok(PinnedSqlite {
             inner: Arc::clone(&self.inner),
             conn: Arc::new(Mutex::new(Some(conn))),
+            gate: tokio::sync::Mutex::new(()),
             _permit: permit,
         })
     }
@@ -244,10 +245,17 @@ impl SqlitePool {
                     }
                 },
             };
-            // A query error does not poison the connection, so it goes back to the
-            // pool regardless; only a failed open leaves us without one.
+            // A normal query error (a constraint violation, say) leaves the
+            // connection healthy, but a terminal error (disk full, corruption, an
+            // IO failure) can poison it. On error, probe the connection and discard
+            // it when the probe fails, so a broken connection is never handed back
+            // to the pool to fail every later query routed to it. A fresh one is
+            // opened on demand next time.
             let result = work(&mut conn);
-            lock(&inner.idle).push(conn);
+            let healthy = result.is_ok() || conn.execute_batch("SELECT 1;").is_ok();
+            if healthy {
+                lock(&inner.idle).push(conn);
+            }
             let _ = tx.send(result);
         });
 
@@ -385,6 +393,10 @@ fn execute(conn: &mut Connection, sql: &str, params: &[Value]) -> crate::Result<
 pub(crate) struct PinnedSqlite {
     inner: Arc<Inner>,
     conn: Arc<Mutex<Option<Connection>>>,
+    /// Serializes operations on this connection: a transaction runs its
+    /// statements sequentially, so two concurrent calls (for example via
+    /// `tokio::join!`) queue instead of racing for the single connection.
+    gate: tokio::sync::Mutex<()>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -408,6 +420,9 @@ impl PinnedSqlite {
         F: FnOnce(&mut Connection) -> crate::Result<T> + Send + 'static,
         T: Send + 'static,
     {
+        // Hold the gate for the whole operation so concurrent statements on the
+        // same transaction serialize rather than failing with "already in use".
+        let _gate = self.gate.lock().await;
         self.inner.statements.fetch_add(1, Ordering::Relaxed);
         let mut conn = self.take_conn()?;
         let slot = Arc::clone(&self.conn);
@@ -548,6 +563,24 @@ mod tests {
         );
 
         // And the pool still serves queries on that single recovered connection.
+        let rows = pool.fetch_all("SELECT 1".into(), vec![]).await.unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_query_error_keeps_a_healthy_connection() {
+        // A failing statement (here, a missing table) is an ordinary query error,
+        // not a poisoned connection: the connection passes the health probe and is
+        // returned to the pool so it is reused, not discarded and reopened.
+        let pool = SqlitePool::new(":memory:", 1).unwrap();
+
+        let result = pool
+            .fetch_all("SELECT * FROM does_not_exist".into(), vec![])
+            .await;
+        assert!(result.is_err(), "the query should fail");
+        assert_eq!(pool.idle_len(), 1, "a healthy connection stays in the pool");
+
+        // The pool still serves queries on the same connection.
         let rows = pool.fetch_all("SELECT 1".into(), vec![]).await.unwrap();
         assert_eq!(rows.len(), 1);
     }

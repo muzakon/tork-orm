@@ -95,7 +95,7 @@ This document lists the components, edge cases, and features of Tork ORM that ar
   );
   ```
   the second query will immediately fail with the error `pinned connection is already in use` instead of waiting for the connection to be returned.
-- **Status:** Untested. There is no queueing, semaphores, or async locking on the transaction executor to serialize concurrent operations safely.
+- **Status:** RESOLVED. `PinnedSqlite` now holds an async gate (`tokio::sync::Mutex`) that each operation locks for its duration, so concurrent statements on the same transaction (for example via `tokio::join!`) serialize and queue instead of failing with `pinned connection is already in use`. Covered by `concurrent_queries_on_a_transaction_serialize`.
 
 ## 17. Preloading Type Lookup Collision (Critical Bug)
 - **Risk:** The preloader uses a `HashMap<TypeId, Box<dyn Any>>` to attach preloaded relation slices to parent models (implemented in [`preload.rs`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/preload.rs#L71-L85)).
@@ -114,7 +114,7 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 ## 19. Persistent Broken Connection Poisoning (High Risk)
 - **Risk:** If a connection in the pool hits a terminal database error (e.g. connection timeout, corrupted file, or disk-full error), the driver still returns the connection handle back into the idle pool [`sqlite.rs:L209-211`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/driver/sqlite.rs#L209-L211).
 - **Bug:** There is no health check, validation query, or connection recycling logic. Once a connection goes bad, it will continuously be checked out from the pool and fail every subsequent query that is routed to it.
-- **Status:** Untested connection recovery.
+- **Status:** RESOLVED. After a query error, the pooled connection is health-probed (`SELECT 1`) before being returned: a healthy connection (ordinary query error) is reused, but one poisoned by a terminal error fails the probe and is discarded instead of returned, so a broken connection no longer fails every later query routed to it. Covered by `a_query_error_keeps_a_healthy_connection`.
 
 ## 20. Dialect Extensibility & Open-Closed Violations (High Risk / Architectural Flaw)
 - **Risk:** Although a `Dialect` trait exists, DDL and query generation are largely hardcoded in the core library rather than delegating to the dialect. Adding new databases (like PostgreSQL, MySQL, MSSQL, or Oracle) is heavily restricted:

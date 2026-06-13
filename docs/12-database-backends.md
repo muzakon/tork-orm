@@ -29,6 +29,8 @@ The second argument is the connection-pool size.
 
 When every connection in the pool is busy, a new query waits for one to free up. To keep a connection leak or a stuck query from wedging the whole server, that wait is bounded: a checkout that cannot get a connection within **30 seconds** fails with a timeout error instead of hanging forever, so the request fails fast and the runtime stays responsive. A cancelled query (for example one wrapped in `tokio::time::timeout` that fires) returns its connection to the pool rather than leaking it, so the pool does not thrash under load.
 
+A connection that fails a query is health-checked before going back to the pool: an ordinary error (a constraint violation, a missing table) leaves it healthy and it is reused, but a connection poisoned by a terminal error (disk full, corruption, an IO failure) fails the check and is discarded, so a broken connection is never handed to a later query — a fresh one is opened on demand.
+
 ## Feature Matrix
 
 Most of the query API is identical on every backend. A few features are dialect-specific; using one where it is not supported produces a clear error at execution time rather than invalid SQL.

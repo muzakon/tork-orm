@@ -86,6 +86,9 @@ tx.commit().await?; // Or tx.rollback().await?;
 ### Automatic Rollback on Drop
 If a transaction handle is dropped without calling `.commit()` or `.rollback()` (for example, if a function returns early due to an error `?`), the transaction is **automatically rolled back** on drop.
 
+### Concurrent Statements on One Transaction
+A transaction owns a single pinned connection, so its statements run one at a time. If you issue two statements on the same transaction concurrently (for example with `tokio::join!`), they are **serialized** — the second waits for the first to finish rather than failing. Prefer issuing transaction statements sequentially; the serialization is a safety net, not a way to parallelize work within a transaction.
+
 ---
 
 ## 4. Transaction Options & Isolation Levels
