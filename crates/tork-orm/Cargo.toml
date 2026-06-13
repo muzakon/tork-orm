@@ -6,7 +6,7 @@ rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "A Tortoise-style async ORM for Rust with typed queries and a dialect-agnostic core, native to the Tork web framework."
+description = "A standalone async ORM for Rust with typed queries and a dialect-agnostic core (SQLite/PostgreSQL/MySQL). Framework-agnostic; optional native integration with the Tork web framework via the `tork` feature."
 
 [dependencies]
 tork-orm-core = { workspace = true, default-features = false }
@@ -14,7 +14,10 @@ tork-orm-macros = { workspace = true }
 inventory = { workspace = true, optional = true }
 
 [features]
-default = ["sqlite", "tork", "migrations"]
+# Framework-agnostic by default: a bundled SQLite backend and migrations, with no
+# web framework pulled in. Tork users opt into the integration with `features =
+# ["tork"]`; other frameworks (Axum, Actix, …) or standalone use need nothing extra.
+default = ["sqlite", "migrations"]
 # Bundled SQLite backend.
 sqlite = ["tork-orm-core/sqlite"]
 # Reserved for future backends.
@@ -23,7 +26,7 @@ mysql = ["tork-orm-core/mysql"]
 # Schema migrations (the migration engine) and the `migrate generate` model
 # registry. The registry enumerates models at link time via `inventory`.
 migrations = ["tork-orm-core/migrations", "dep:inventory"]
-# Native integration with the Tork web framework.
+# Optional native integration with the Tork web framework (DI + error bridging).
 tork = ["tork-orm-core/tork"]
 
 [dev-dependencies]

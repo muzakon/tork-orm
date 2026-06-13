@@ -7,7 +7,9 @@ description = "Example application demonstrating the Tork ORM with the Tork web 
 
 [dependencies]
 tork = { workspace = true }
-tork-orm = { path = "../../crates/tork-orm" }
+# This example uses the Tork integration, so it opts into the `tork` feature
+# (no longer default — the ORM is framework-agnostic by default).
+tork-orm = { path = "../../crates/tork-orm", features = ["tork"] }
 # garde's derive references `::garde` directly, so #[api_model] models need it in scope.
 garde = { workspace = true }
 tokio = { workspace = true }

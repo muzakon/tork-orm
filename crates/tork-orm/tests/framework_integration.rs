@@ -1,6 +1,10 @@
 //! Integration with the Tork web framework: a Database registered as a resource,
 //! injected into handlers as Arc<Database>, with ORM errors bridged to HTTP
 //! statuses. Driven in-process through the TestClient.
+//!
+//! The framework integration is opt-in, so this whole suite is gated on the `tork`
+//! feature (run with `cargo test -p tork-orm --features tork`).
+#![cfg(feature = "tork")]
 
 use std::sync::Arc;
 
