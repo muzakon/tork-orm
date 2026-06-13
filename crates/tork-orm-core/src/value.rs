@@ -96,6 +96,54 @@ impl BindValue for i32 {
     }
 }
 
+impl BindValue for u8 {
+    fn to_value(&self) -> Value {
+        Value::Int(i64::from(*self))
+    }
+}
+
+impl BindValue for u16 {
+    fn to_value(&self) -> Value {
+        Value::Int(i64::from(*self))
+    }
+}
+
+impl BindValue for u32 {
+    fn to_value(&self) -> Value {
+        Value::Int(i64::from(*self))
+    }
+}
+
+impl BindValue for u64 {
+    fn to_value(&self) -> Value {
+        Value::Int(*self as i64)
+    }
+}
+
+impl BindValue for usize {
+    fn to_value(&self) -> Value {
+        Value::Int(*self as i64)
+    }
+}
+
+impl BindValue for i8 {
+    fn to_value(&self) -> Value {
+        Value::Int(i64::from(*self))
+    }
+}
+
+impl BindValue for i16 {
+    fn to_value(&self) -> Value {
+        Value::Int(i64::from(*self))
+    }
+}
+
+impl BindValue for f32 {
+    fn to_value(&self) -> Value {
+        Value::Real(f64::from(*self))
+    }
+}
+
 impl BindValue for f64 {
     fn to_value(&self) -> Value {
         Value::Real(*self)
@@ -226,6 +274,61 @@ impl FromValue for i32 {
     }
 }
 
+impl FromValue for u8 {
+    fn from_value(value: Value) -> crate::Result<Self> {
+        let wide = i64::from_value(value)?;
+        u8::try_from(wide).map_err(|_| crate::OrmError::conversion("integer out of range for u8"))
+    }
+}
+
+impl FromValue for u16 {
+    fn from_value(value: Value) -> crate::Result<Self> {
+        let wide = i64::from_value(value)?;
+        u16::try_from(wide).map_err(|_| crate::OrmError::conversion("integer out of range for u16"))
+    }
+}
+
+impl FromValue for u32 {
+    fn from_value(value: Value) -> crate::Result<Self> {
+        let wide = i64::from_value(value)?;
+        u32::try_from(wide).map_err(|_| crate::OrmError::conversion("integer out of range for u32"))
+    }
+}
+
+impl FromValue for u64 {
+    fn from_value(value: Value) -> crate::Result<Self> {
+        let wide = i64::from_value(value)?;
+        u64::try_from(wide).map_err(|_| crate::OrmError::conversion("integer out of range for u64"))
+    }
+}
+
+impl FromValue for usize {
+    fn from_value(value: Value) -> crate::Result<Self> {
+        let wide = i64::from_value(value)?;
+        usize::try_from(wide).map_err(|_| crate::OrmError::conversion("integer out of range for usize"))
+    }
+}
+
+impl FromValue for i8 {
+    fn from_value(value: Value) -> crate::Result<Self> {
+        let wide = i64::from_value(value)?;
+        i8::try_from(wide).map_err(|_| crate::OrmError::conversion("integer out of range for i8"))
+    }
+}
+
+impl FromValue for i16 {
+    fn from_value(value: Value) -> crate::Result<Self> {
+        let wide = i64::from_value(value)?;
+        i16::try_from(wide).map_err(|_| crate::OrmError::conversion("integer out of range for i16"))
+    }
+}
+
+impl FromValue for f32 {
+    fn from_value(value: Value) -> crate::Result<Self> {
+        f64::from_value(value).map(|v| v as f32)
+    }
+}
+
 impl FromValue for f64 {
     fn from_value(value: Value) -> crate::Result<Self> {
         match value {
@@ -314,5 +417,103 @@ impl<T: FromValue> FromValue for Option<T> {
             Value::Null => Ok(None),
             other => T::from_value(other).map(Some),
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn i64_rejects_text_value() {
+        let result = i64::from_value(Value::Text("not-a-number".to_string()));
+        let err = result.expect_err("expected conversion error");
+        assert!(matches!(err.kind(), crate::error::ErrorKind::Conversion));
+    }
+
+    #[test]
+    fn i32_rejects_out_of_range() {
+        let result = i32::from_value(Value::Int(i64::MAX));
+        let err = result.expect_err("expected range error");
+        assert!(matches!(err.kind(), crate::error::ErrorKind::Conversion));
+        assert!(err.message().contains("out of range"));
+    }
+
+    #[test]
+    fn bool_rejects_text_value() {
+        let result = bool::from_value(Value::Text("yes".to_string()));
+        assert!(matches!(
+            result.expect_err("expected conversion error").kind(),
+            crate::error::ErrorKind::Conversion
+        ));
+    }
+
+    #[test]
+    fn f64_rejects_text_value() {
+        let result = f64::from_value(Value::Text("NaN".to_string()));
+        assert!(matches!(
+            result.expect_err("expected conversion error").kind(),
+            crate::error::ErrorKind::Conversion
+        ));
+    }
+
+    #[test]
+    fn string_rejects_int_value() {
+        let result = String::from_value(Value::Int(42));
+        assert!(matches!(
+            result.expect_err("expected conversion error").kind(),
+            crate::error::ErrorKind::Conversion
+        ));
+    }
+
+    #[test]
+    fn offset_datetime_rejects_garbage_text() {
+        let result = OffsetDateTime::from_value(Value::Text("not a date".to_string()));
+        let err = result.expect_err("expected conversion error");
+        assert!(matches!(err.kind(), crate::error::ErrorKind::Conversion));
+    }
+
+    #[test]
+    fn bind_unsigned_lowers_to_int() {
+        assert!(matches!(42_u8.to_value(), Value::Int(42)));
+        assert!(matches!(42_u16.to_value(), Value::Int(42)));
+        assert!(matches!(42_u32.to_value(), Value::Int(42)));
+        assert!(matches!(42_u64.to_value(), Value::Int(42)));
+        assert!(matches!(42_usize.to_value(), Value::Int(42)));
+    }
+
+    #[test]
+    fn bind_signed_lowers_to_int() {
+        assert!(matches!((-1_i8).to_value(), Value::Int(-1)));
+        assert!(matches!((-1_i16).to_value(), Value::Int(-1)));
+    }
+
+    #[test]
+    fn bind_f32_lowers_to_real() {
+        assert!(matches!(1.5_f32.to_value(), Value::Real(_)));
+    }
+
+    #[test]
+    fn from_value_unsigned_round_trip() {
+        let v: u32 = u32::from_value(Value::Int(42)).unwrap();
+        assert_eq!(v, 42);
+        let v: u8 = u8::from_value(Value::Int(255)).unwrap();
+        assert_eq!(v, 255);
+        let v: u64 = u64::from_value(Value::Int(i64::MAX)).unwrap();
+        assert_eq!(v, i64::MAX as u64);
+    }
+
+    #[test]
+    fn from_value_unsigned_rejects_out_of_range() {
+        assert!(u8::from_value(Value::Int(-1)).is_err());
+        assert!(u32::from_value(Value::Int(i64::MAX)).is_err());
+        assert!(i16::from_value(Value::Int(i64::MAX)).is_err());
+    }
+
+    #[test]
+    fn from_value_f32_round_trip() {
+        let v: f32 = f32::from_value(Value::Real(1.5)).unwrap();
+        assert!((v - 1.5).abs() < f32::EPSILON);
     }
 }

@@ -33,6 +33,7 @@ pub struct Relation<P, C> {
     to_column: &'static str,
     filters: Vec<Expr>,
     order_by: Vec<OrderTerm>,
+    limit: Option<u64>,
     _marker: PhantomData<fn() -> (P, C)>,
 }
 
@@ -52,6 +53,7 @@ impl<P, C> Relation<P, C> {
             to_column: child_key,
             filters: Vec::new(),
             order_by: Vec::new(),
+            limit: None,
             _marker: PhantomData,
         }
     }
@@ -71,6 +73,7 @@ impl<P, C> Relation<P, C> {
             to_column: parent_key,
             filters: Vec::new(),
             order_by: Vec::new(),
+            limit: None,
             _marker: PhantomData,
         }
     }
@@ -86,6 +89,15 @@ impl<P, C> Relation<P, C> {
     /// Orders the related rows loaded by [`preload`](crate::QuerySet::preload).
     pub fn order_by(mut self, term: OrderTerm) -> Self {
         self.order_by.push(term);
+        self
+    }
+
+    /// Caps the number of related rows loaded by [`preload`](crate::QuerySet::preload)
+    /// for each parent. Useful when a single parent has a high-cardinality child
+    /// table (for example a popular user with thousands of posts) and pulling
+    /// every row would exhaust memory.
+    pub fn limit(mut self, limit: u64) -> Self {
+        self.limit = Some(limit);
         self
     }
 
@@ -117,6 +129,11 @@ impl<P, C> Relation<P, C> {
     /// Returns the ordering applied when preloading.
     pub fn preload_order_by(&self) -> &[OrderTerm] {
         &self.order_by
+    }
+
+    /// Returns the per-parent row cap applied when preloading, if any.
+    pub fn preload_limit(&self) -> Option<u64> {
+        self.limit
     }
 
     /// Builds an inner join node for this relation.

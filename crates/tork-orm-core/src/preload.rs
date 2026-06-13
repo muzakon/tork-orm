@@ -233,6 +233,7 @@ impl<M: Model, C: Model> PreloadStep<M> for RelationPreload<M, C> {
                 statement
                     .order_by
                     .extend(self.relation.preload_order_by().iter().cloned());
+                statement.limit = self.relation.preload_limit();
 
                 let (sql, params) = render_select(runner.dialect(), &statement);
                 let rows = runner.fetch_all(sql, params).await?;

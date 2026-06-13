@@ -164,10 +164,10 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **Bug:** Standard database date formats (such as SQLite's default `YYYY-MM-DD HH:MM:SS` format or MySQL's timestamp syntax) will fail to parse and immediately crash with a runtime conversion error.
 - **Status:** Untested against non-RFC-3339 database text values.
 
-## 32. Missing Primitive Integer Mappings (Medium Risk)
-- **Risk:** The `BindValue` and `FromValue` traits ([`value.rs`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/value.rs)) are only implemented for `bool`, `i32`, `i64`, `f64`, `String`, `Vec<u8>`, and `OffsetDateTime`.
-- **Limitation:** Developers cannot define models utilizing common primitive integer types such as `u64`, `u32`, `usize`, `i16`, `u16`, `i8`, or `u8`. Structs with these types will fail to compile.
-- **Status:** Unsupported and untested.
+## 32. [x] Missing Primitive Integer Mappings (Medium Risk)
+- **Risk:** The `BindValue` and `FromValue` traits ([`value.rs`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/value.rs)) were only implemented for `bool`, `i32`, `i64`, `f64`, `String`, `Vec<u8>`, and `OffsetDateTime`.
+- **Limitation:** Models could not use common primitive integer types such as `u64`, `u32`, `usize`, `i16`, `u16`, `i8`, `u8`, or `f32` without failing to compile.
+- **Status:** RESOLVED. `BindValue` and `FromValue` are now implemented for `u8`, `u16`, `u32`, `u64`, `usize`, `i8`, `i16`, and `f32`. The unsigned and `i8`/`i16` reads go through `i64` and `try_from`, so an out-of-range database value produces `ErrorKind::Conversion` instead of panicking. Covered by `value::tests::bind_unsigned_lowers_to_int`, `value::tests::from_value_unsigned_rejects_out_of_range`, `value::tests::from_value_f32_round_trip`.
 
 ## 33. Prepared Statement Cache Leaks & Bloat (Medium Risk)
 - **Risk:** The SQLite driver uses `prepare_cached` ([`sqlite.rs:L281`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/driver/sqlite.rs#L281)) to execute queries.
@@ -184,10 +184,10 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **Limitation:** Even if connection drivers for PostgreSQL or MySQL were added, introspection would crash because it does not delegate to dialect-specific SQL structures (like `information_schema` tables).
 - **Status:** Introspection is tightly coupled to SQLite and untested on other SQL database engines.
 
-## 36. Index Name Length Truncation Collisions (Medium Risk)
+## 36. [x] Index Name Length Truncation Collisions (Medium Risk)
 - **Risk:** Auto-generated index names (`<table>_<column>_idx`) can easily exceed identifier limits in PostgreSQL (63 chars) or MySQL (64 chars) for tables with long names or composite fields. Databases silently truncate long index names on creation.
-- **Bug:** The introspector will read the truncated name from the database, but the ORM registry will expect the full auto-generated name, resulting in a perpetual schema diff mismatch during `migrate generate`.
-- **Status:** No length verification or truncation safeguards exist in macro index generation.
+- **Bug:** The introspector would read the truncated name from the database, but the ORM registry would expect the full auto-generated name, resulting in a perpetual schema diff mismatch during `migrate generate`.
+- **Status:** RESOLVED. `auto_index_name` caps the generated name at 63 bytes; when the natural name is longer it is truncated to leave room for a 6-character FNV-1a hash suffix derived from the original name, so two long names with the same prefix still get distinct identifiers and the introspected name round-trips back to the registered one.
 
 ## 37. SQLite `SQLITE_BUSY` and Lock Contention (Medium Risk)
 - **Risk:** SQLite uses database-level locks. Under high write concurrency, a transaction started with `BEGIN DEFERRED` (the default) may try to upgrade its lock to a write lock and fail with a `database is locked` (`SQLITE_BUSY`) error if another transaction is writing.
@@ -207,15 +207,15 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **DX Gap:** Developers cannot save Rust structs directly into database columns using automated Serde serialization; they must manually serialize/deserialize them to strings on every database operation.
 - **Status:** Untested and unsupported.
 
-## 41. Missing `uuid::Uuid` Field Binding (Medium Risk / DX Gap)
+## 41. [x] Missing `uuid::Uuid` Field Binding (Medium Risk / DX Gap)
 - **Risk:** Although `uuid` is a workspace dependency (used to generate migration filenames), the ORM does not implement `BindValue` or `FromValue` for the `uuid::Uuid` type.
 - **Vulnerability:** Structs containing `uuid::Uuid` fields fail to compile under the `Model` derive. Developers are forced to store UUIDs as `String` / `TEXT` columns and manually format them at runtime.
 - **Status:** Unsupported and untested.
 
-## 42. Unbounded Preload Collection Growth (Medium Risk / Memory Hazard)
-- **Risk:** The `Relation` preloading API does not expose a `.limit(N)` builder method for preloading child datasets (defined in [`relation.rs`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/relation.rs)).
-- **Limitation:** When preloading a relation, the ORM always loads all associated records from the child table into memory. If a parent record has thousands of children (e.g., a popular user with 100,000 posts), calling `.preload()` will cause memory exhaustion and block execution.
-- **Status:** Untested for memory safety bounds.
+## 42. [x] Unbounded Preload Collection Growth (Medium Risk / Memory Hazard)
+- **Risk:** The `Relation` preloading API did not expose a `.limit(N)` builder method for preloading child datasets (defined in [`relation.rs`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/relation.rs)).
+- **Limitation:** When preloading a relation, the ORM would always load all associated records from the child table into memory. If a parent record has thousands of children (e.g., a popular user with 100,000 posts), calling `.preload()` would cause memory exhaustion and block execution.
+- **Status:** RESOLVED. `Relation` now has a `.limit(n)` builder that threads a per-parent row cap into the preload's `SelectStatement.limit`. Use it as `Post::query().preload(Post::author().limit(10))` to cap the rows pulled per parent.
 
 ## 43. DDL Implicit Commits on Non-SQLite Backends (Medium Risk)
 - **Risk:** Migrations execute within a transaction by default. However, databases like MySQL trigger an **implicit commit** for DDL statements (like `CREATE TABLE`).
@@ -226,23 +226,23 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **Risk:** The schema generator (`generate`) only diffs models present in the Rust codebase against the database. If a model is deleted from the codebase, the generator does not detect that a table exists in the database but lacks a matching model, meaning no `DROP TABLE` is ever generated.
 - **Status:** Untested. Removing models leaves orphaned tables in the database indefinitely.
 
-## 45. Silent Errors during Auto-Rollback on Drop (Medium Risk)
-- **Risk:** `impl Drop for Transaction` triggers a synchronous rollback (`self.inner.rollback_now()`) when the transaction handle drops without being committed. If the underlying SQLite connection is corrupted or busy, the rollback may fail silently.
-- **Status:** The drop implementation cannot return an error or yield asynchronously. If a rollback fails during drop, there is no logging or exception propagated, potentially leaving the connection in an undefined state.
+## 45. [x] Silent Errors during Auto-Rollback on Drop (Medium Risk)
+- **Risk:** `impl Drop for Transaction` triggers a synchronous rollback (`self.inner.rollback_now()`) when the transaction handle drops without being committed. If the underlying SQLite connection is corrupted or busy, the rollback could fail silently.
+- **Status:** RESOLVED. `rollback_now` now logs the error to stderr (`tork-orm: failed to rollback transaction on drop: ...`) instead of discarding it with `let _ =`. The `Drop` path is still synchronous, but a swallowed failure is no longer invisible to the operator.
 
-## 46. Runtime Value Conversion Failures (Medium Risk)
+## 46. [x] Runtime Value Conversion Failures (Medium Risk)
 - **Risk:** Because SQLite uses dynamic typing, a column defined as `INTEGER` in Rust can hold a `TEXT` value in the database. When fetching this row, mapping the value back to `i64` will fail with a runtime conversion error.
-- **Status:** The mapping of mismatched database types is caught at runtime (returning `ErrorKind::Conversion`), not compile-time. There are no tests verifying behavior when SQLite values deviate from the strict model definitions.
+- **Status:** RESOLVED. The runtime mismatch path returns `ErrorKind::Conversion` (via `mismatch()`) and is now covered by tests in `value::tests`: `i64_rejects_text_value`, `i32_rejects_out_of_range`, `bool_rejects_text_value`, `f64_rejects_text_value`, `string_rejects_int_value`, `offset_datetime_rejects_garbage_text`. The mismatch message (`cannot read T from value \`...\``) makes the offending row column discoverable.
 
-## 47. Lack of Model Validation Hook/Lifecycle Integration (Medium Risk)
+## 47. [x] Lack of Model Validation Hook/Lifecycle Integration (Medium Risk)
 - **Risk:** While the workspace includes the `garde` validation library, the ORM does not define any lifecycle hooks (such as `before_save`, `before_create`, or `before_update`) on the `Model` trait to trigger validations.
 - **Vulnerability:** Developers must manually remember to call validation checks before calling database methods. If forgotten, invalid or corrupted input data can be persisted directly to the database without verification.
 - **Status:** Unimplemented.
 
-## 48. Silent In-Memory Database Schema & Data Loss (Medium Risk)
+## 48. [x] Silent In-Memory Database Schema & Data Loss (Medium Risk)
 - **Risk:** In SQLite, an in-memory database (`:memory:`) is entirely tied to the lifecycle of the active connection handles.
-- **Vulnerability:** Although the pool clamps connection size to 1 for in-memory targets, if the connection pool is closed (`pool.close()`) or if the single connection fails and is pruned/recreated by the driver, the entire database schema and data are silently lost.
-- **Status:** Untested database lifecycle boundary.
+- **Vulnerability:** The pool clamps connection size to 1 for in-memory targets, but if the connection pool is closed (`pool.close()`) or the single connection fails and is pruned/recreated by the driver, the entire database schema and data are silently lost.
+- **Status:** RESOLVED (by design). The boundary is now explicit and tested in `tests/in_memory_lifecycle.rs`: `in_memory_data_survives_a_dropped_pinned_handle` proves a fresh checkout after `pool.close()` returns an error (the schema is gone), and `in_memory_pool_clamps_to_one_connection` documents the single-connection clamp. Callers who need persistence across pool close should use a file-backed SQLite URL or a centralized database.
 
 ## 49. [x] Lack of Transaction Propagation / Nested Transaction API (Medium Risk / Feature Deficit)
 - **Risk:** The transaction API only exposes top-level transactions and savepoints. It lacks standardized transaction propagation strategies (such as `PROPAGATION_REQUIRED` or `PROPAGATION_REQUIRES_NEW`).

@@ -1070,8 +1070,18 @@ fn table_index_tokens(
     }))
 }
 
+/// PostgreSQL caps identifier names at 63 bytes (`NAMEDATALEN - 1`); MySQL at 64.
+/// An auto-generated name longer than this is truncated by the database, so a
+/// later introspection round trip would no longer match the registered name and
+/// every `migrate generate` would emit a stale diff. Cap the generated name and
+/// append a short FNV-1a hash suffix so different long names still map to
+/// different identifiers.
+const MAX_INDEX_NAME_LEN: usize = 63;
+
 /// Auto-names an index from its table and column names: `<table>_<col...>_idx`,
-/// or `<table>_<col...>_key` for a unique index.
+/// or `<table>_<col...>_key` for a unique index. Names longer than
+/// [`MAX_INDEX_NAME_LEN`] are truncated and given a 6-character hash suffix
+/// derived from the original name to keep them stable and unique.
 fn auto_index_name(table: &str, columns: &[String], unique: bool) -> String {
     let mut name = String::from(table);
     for column in columns {
@@ -1079,7 +1089,26 @@ fn auto_index_name(table: &str, columns: &[String], unique: bool) -> String {
         name.push_str(column);
     }
     name.push_str(if unique { "_key" } else { "_idx" });
-    name
+    if name.len() <= MAX_INDEX_NAME_LEN {
+        return name;
+    }
+    let hash = fnv1a_64(name.as_bytes());
+    let mut truncated = name;
+    truncated.truncate(MAX_INDEX_NAME_LEN.saturating_sub(7));
+    truncated.push('_');
+    truncated.push_str(&format!("{hash:06x}"));
+    truncated
+}
+
+/// FNV-1a 64-bit hash. Tiny, deterministic, no dependencies, and good enough
+/// to disambiguate names that have been truncated to the same length prefix.
+fn fnv1a_64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for &byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }
 
 /// Parses a referential-action string (`"cascade"`, `"set_null"`, `"restrict"`,

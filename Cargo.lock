@@ -2558,6 +2558,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
+ "socket2 0.6.4",
  "tempfile",
  "time",
  "tokio",

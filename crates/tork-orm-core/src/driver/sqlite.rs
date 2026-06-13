@@ -481,7 +481,9 @@ impl PinnedSqlite {
     /// closes any open transaction when the connection is eventually dropped.
     pub(crate) fn rollback_now(&self) {
         if let Ok(conn) = self.take_conn() {
-            let _ = conn.execute_batch("ROLLBACK");
+            if let Err(error) = conn.execute_batch("ROLLBACK") {
+                eprintln!("tork-orm: failed to rollback transaction on drop: {error}");
+            }
             *self.conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(conn);
         }
     }
