@@ -5,8 +5,8 @@ PostgreSQL, and MySQL** from a single model. Queries are expressed through typed
 handles (mismatched comparisons are compile errors), relations preload without N+1, and
 schema migrations are plain SQL files driven by a zero-compilation CLI.
 
-Part of the [Tork](https://github.com/muzakon/tork) project; usable standalone or with
-the [Tork web framework](https://github.com/muzakon/tork-framework).
+Part of the [Tork](https://github.com/tork-rs/tork) project; usable standalone or with
+the [Tork web framework](https://github.com/tork-rs/tork-framework).
 
 ## Features
 

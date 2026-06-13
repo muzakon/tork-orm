@@ -23,7 +23,7 @@ edition = "2021"
 rust-version = "1.96"
 authors = ["muzakon <hasanmuzak@hotmail.com>"]
 license = "MIT"
-repository = "https://github.com/muzakon/tork"
+repository = "https://github.com/tork-rs/tork"
 
 [workspace.dependencies]
 # ORM crates.
