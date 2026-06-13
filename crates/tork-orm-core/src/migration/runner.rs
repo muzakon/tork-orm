@@ -20,9 +20,10 @@ const DEFAULT_TABLE: &str = "_tork_migrations";
 /// What to do when an already-applied migration's checksum no longer matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OnMismatch {
-    /// Print a warning and continue (the default).
+    /// Print a warning and continue.
     Warn,
-    /// Fail with an error.
+    /// Fail with an error (the default): an already-applied migration whose file
+    /// has changed indicates schema drift and aborts the run.
     Error,
 }
 
@@ -67,7 +68,7 @@ impl<'d> Migrator<'d> {
             db,
             set,
             table: DEFAULT_TABLE.to_string(),
-            on_mismatch: OnMismatch::Warn,
+            on_mismatch: OnMismatch::Error,
         }
     }
 
@@ -78,7 +79,7 @@ impl<'d> Migrator<'d> {
     }
 
     /// Sets how a changed-since-applied checksum is handled (default
-    /// [`OnMismatch::Warn`]).
+    /// [`OnMismatch::Error`]).
     pub fn on_checksum_mismatch(mut self, on_mismatch: OnMismatch) -> Self {
         self.on_mismatch = on_mismatch;
         self

@@ -69,6 +69,16 @@ impl Dialect for PostgresDialect {
         65535
     }
 
+    fn acquire_migration_lock_sql(&self, key: i64) -> Option<String> {
+        // Session-level advisory lock; blocks until granted and is released when
+        // the connection ends, so a crashed migrator never wedges the lock.
+        Some(format!("SELECT pg_advisory_lock({key})"))
+    }
+
+    fn release_migration_lock_sql(&self, key: i64) -> Option<String> {
+        Some(format!("SELECT pg_advisory_unlock({key})"))
+    }
+
     fn supports_distinct_on(&self) -> bool {
         true
     }
@@ -223,5 +233,19 @@ mod tests {
         assert!(dialect.supports_index_include());
         assert!(dialect.supports_index_opclass());
         assert!(dialect.supports_returning());
+    }
+
+    #[test]
+    fn uses_session_advisory_locks_for_migrations() {
+        let dialect = PostgresDialect::new();
+        assert_eq!(
+            dialect.acquire_migration_lock_sql(42).as_deref(),
+            Some("SELECT pg_advisory_lock(42)")
+        );
+        assert_eq!(
+            dialect.release_migration_lock_sql(42).as_deref(),
+            Some("SELECT pg_advisory_unlock(42)")
+        );
+        assert_eq!(dialect.max_bind_params(), 65535);
     }
 }

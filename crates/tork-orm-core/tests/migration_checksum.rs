@@ -79,20 +79,21 @@ async fn status_reports_applied_and_checksum_match() {
 }
 
 #[tokio::test]
-async fn changed_checksum_errors_under_error_policy() {
+async fn changed_checksum_errors_by_default_and_warn_overrides() {
     let db = Database::connect(":memory:", 1).await.unwrap();
     Migrator::new(&db, set(50)).up().await.unwrap();
 
-    // Re-running a changed migration under the Error policy fails.
-    let error = Migrator::new(&db, set(100))
-        .on_checksum_mismatch(OnMismatch::Error)
-        .up()
-        .await
-        .unwrap_err();
+    // The default policy aborts on a changed already-applied migration, so a
+    // silently edited applied migration cannot drift the schema.
+    let error = Migrator::new(&db, set(100)).up().await.unwrap_err();
     assert_eq!(error.kind(), tork_orm_core::ErrorKind::Configuration);
 
-    // Under the default Warn policy it does not error (warns to stderr).
-    let applied = Migrator::new(&db, set(100)).up().await.unwrap();
+    // The explicit Warn policy continues (warning to stderr) and applies nothing.
+    let applied = Migrator::new(&db, set(100))
+        .on_checksum_mismatch(OnMismatch::Warn)
+        .up()
+        .await
+        .unwrap();
     assert_eq!(applied, 0);
 }
 

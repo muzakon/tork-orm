@@ -115,6 +115,26 @@ tork-orm migrate down
 tork-orm migrate redo
 ```
 
+### Production safety
+
+The migrator is built to be safe in centralized, autoscaling deployments:
+
+- **Concurrent runs are serialized.** When several instances boot at once and
+  each runs `migrate up`, the migrator takes a session advisory lock on the
+  database (PostgreSQL `pg_advisory_lock`, MySQL `GET_LOCK`) so only one applies
+  migrations at a time; the rest wait and then see nothing pending. The lock is
+  released when the connection ends, so a crashed migrator never wedges it.
+  SQLite needs no lock — its file-level write lock already serializes writers.
+- **Edited applied migrations abort the run.** If a migration file changed after
+  it was applied, its checksum no longer matches and `migrate up` fails rather
+  than silently running a different schema than what is recorded. This is the
+  default. For local development you can downgrade it to a warning with
+  `--allow-checksum-mismatch` (never use this in production).
+- **`migrate down <revision>` reverts only what is applied.** Rolling back to a
+  revision reverts the migrations applied after it and stops; unapplied
+  migrations sitting later in the chain (for example after pulling a branch) do
+  not cause earlier, intended-to-keep migrations to be rolled back.
+
 ---
 
 ## 3. Automated Schema Generation (`migrate generate`)

@@ -13,7 +13,7 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **Risk:** The migrator's `FileMigrator::down_to` method calculates the number of steps to roll back as `chain.len().saturating_sub(position + 1)`, where `position` is the target migration's index in the local migration chain ([`files.rs:L189-199`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/migration/files.rs#L189-L199)).
 - **Bug:** This count represents the total number of files *conceptually* following the target in the local chain, regardless of whether they have been applied. If there are new, unapplied migrations at the end of the local chain, this step count will be larger than the actual number of applied migrations after the target. When calling `self.down(after)`, the runner will roll back the latest `after` applied migrations, meaning it will roll back the target itself and even earlier applied migrations that the user intended to preserve.
 - **Consequence:** Under common developer scenarios (e.g. pulling a new branch containing new unapplied migrations, then attempting to roll back a local applied migration to resolve conflicts), developers will experience silent, unexpected data loss in earlier migrations.
-- **Status:** Untested and broken.
+- **Status:** RESOLVED. `down_to` now counts only the *applied* migrations strictly after the target (from `_tork_migrations`), so unapplied files later in the chain no longer cause the target or earlier migrations to be reverted. Covered by `down_to_reverts_only_applied_migrations_after_target`.
 
 ## 3. Serverless Stateless Ephemerality & SQLite Data Loss (High Risk / Deployment Hazard)
 - **Risk:** The ORM currently compiles and defaults specifically to SQLite connection pools.
@@ -23,7 +23,7 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 ## 4. Lack of Distributed Migration Lock / Race Conditions (High Risk / Concurrency Hazard)
 - **Risk:** The migration runner executes DDL statements and registers status inside transactions but does not apply any distributed lock or database-level lock during migration execution.
 - **Vulnerability:** In serverless environments, deploying a new version often triggers multiple container instances to spin up concurrently. If migrations run automatically on startup, multiple containers will run `migrator.up()` at the exact same moment. This creates lock contentions on `_tork_migrations` or duplicate DDL commands, causing container crashes and deployment boot loops.
-- **Status:** Vulnerable and unlocked.
+- **Status:** RESOLVED. `FileMigrator` takes a session advisory lock around up/down (PostgreSQL `pg_advisory_lock`, MySQL `GET_LOCK`, keyed by the bookkeeping table; released when the connection ends). Concurrent migrators serialize instead of racing. SQLite relies on its file-level write lock + busy timeout (dialect returns no lock SQL). Covered by `uses_session_advisory_locks_for_migrations` / `uses_named_user_locks_for_migrations`.
 
 ## 5. Linker Stripping & Dead-Code Elimination (High Operational Risk)
 - **Risk:** The ORM relies on the `inventory` crate for link-time model schema registration so that `migrate generate` can discover models automatically ([`lib.rs:L93-102`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm/src/lib.rs#L93-L102)).
@@ -66,7 +66,7 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 ## 12. Permissive Checksum Mismatch Policy in Production (Medium Risk)
 - **Risk:** If a migration file is modified after it has already been applied, the migrator compares its hash against the database registry ([`files.rs:L133-136`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/migration/files.rs#L133-L136)).
 - **Vulnerability:** The default action for a mismatch is `OnMismatch::Warn`, which prints a warning to stderr and proceeds. In production, this can lead to silent schema drifts if developers accidentally modify applied migrations, eventually causing runtime queries to fail.
-- **Status:** Untested for warning suppression. Production environments must override this to `OnMismatch::Error` to abort deployment on checksum mismatches.
+- **Status:** RESOLVED. The default is now `OnMismatch::Error` (both `FileMigrator` and `Migrator`): an edited applied migration aborts the run. The CLI exposes `--allow-checksum-mismatch` to downgrade to a warning for local development. Covered by `editing_an_applied_migration_aborts_up_by_default` and `changed_checksum_errors_by_default_and_warn_overrides`.
 
 ## 13. SQL Injection Bypass via Dialect Escaping (High Security Risk)
 - **Risk:** In [`writer.rs`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/dialect/writer.rs#L419-L428), `quote_string_literal` escapes strings by only doubling single quotes (`'`).

@@ -172,3 +172,75 @@ async fn a_changed_file_is_reported_and_can_error() {
         .unwrap_err();
     assert_eq!(error.kind(), tork_orm_core::ErrorKind::Configuration);
 }
+
+#[tokio::test]
+async fn editing_an_applied_migration_aborts_up_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    seed_chain(dir.path());
+    let db = Database::connect(":memory:", 1).await.unwrap();
+    FileMigrator::new(db.clone(), dir.path())
+        .up()
+        .await
+        .unwrap();
+
+    // Change the up SQL of an already-applied migration.
+    write_migration(
+        dir.path(),
+        "aaaa11112222",
+        "",
+        "create_users",
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, extra TEXT);",
+        "DROP TABLE users;",
+    );
+
+    // The default policy now aborts; no explicit on_checksum_mismatch needed.
+    let error = FileMigrator::new(db.clone(), dir.path())
+        .up()
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), tork_orm_core::ErrorKind::Configuration);
+
+    // Opting into Warn lets it proceed and apply nothing new.
+    let applied = FileMigrator::new(db, dir.path())
+        .on_checksum_mismatch(OnMismatch::Warn)
+        .up()
+        .await
+        .unwrap();
+    assert_eq!(applied.len(), 0);
+}
+
+#[tokio::test]
+async fn down_to_reverts_only_applied_migrations_after_target() {
+    // Regression for a data-loss bug: a third migration exists in the chain but
+    // is not applied. down_to(target) must revert only the *applied* migrations
+    // after the target, never the target itself or earlier ones, even though an
+    // unapplied file sits after the target in the chain.
+    let dir = tempfile::tempdir().unwrap();
+    seed_chain(dir.path()); // aaaa = create_users, bbbb = create_posts
+    write_migration(
+        dir.path(),
+        "cccc55556666",
+        "bbbb33334444",
+        "create_comments",
+        "CREATE TABLE comments (id INTEGER PRIMARY KEY);",
+        "DROP TABLE comments;",
+    );
+    let db = Database::connect(":memory:", 1).await.unwrap();
+    let migrator = FileMigrator::new(db.clone(), dir.path());
+
+    // Apply only the first two; the comments migration stays pending.
+    migrator.up_to("bbbb33334444").await.unwrap();
+    assert!(table_exists(&db, "users").await);
+    assert!(table_exists(&db, "posts").await);
+    assert!(!table_exists(&db, "comments").await);
+
+    // Roll back to the first migration: only create_posts should be reverted.
+    let reverted = migrator.down_to("aaaa11112222").await.unwrap();
+    assert_eq!(reverted.len(), 1);
+    assert_eq!(reverted[0].name, "create_posts");
+    assert!(
+        table_exists(&db, "users").await,
+        "the target migration and earlier ones must survive down_to"
+    );
+    assert!(!table_exists(&db, "posts").await);
+}

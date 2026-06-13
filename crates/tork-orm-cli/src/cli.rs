@@ -68,6 +68,11 @@ pub struct GlobalArgs {
     #[arg(long, short = 'y', global = true)]
     pub yes: bool,
 
+    /// Proceed despite a checksum mismatch on an already-applied migration
+    /// (default: abort). For development only; never use in production.
+    #[arg(long, global = true)]
+    pub allow_checksum_mismatch: bool,
+
     /// Disable colored output.
     #[arg(long, global = true)]
     pub no_color: bool,

@@ -84,7 +84,7 @@ impl FileMigrator {
             db,
             dir: dir.into(),
             table: "_tork_migrations".to_string(),
-            on_mismatch: OnMismatch::Warn,
+            on_mismatch: OnMismatch::Error,
         }
     }
 
@@ -95,7 +95,8 @@ impl FileMigrator {
     }
 
     /// Sets how a changed-since-applied checksum is handled (default
-    /// [`OnMismatch::Warn`]).
+    /// [`OnMismatch::Error`], which aborts so an edited applied migration cannot
+    /// silently drift in production).
     pub fn on_checksum_mismatch(mut self, on_mismatch: OnMismatch) -> Self {
         self.on_mismatch = on_mismatch;
         self
@@ -120,36 +121,45 @@ impl FileMigrator {
 
         let pinned = self.db.pinned().await?;
         store::ensure_table(&pinned, &self.table).await?;
-        let records = store::applied_records(&pinned, &self.table).await?;
-        let applied: HashMap<&str, &str> = records
-            .iter()
-            .map(|record| (record.revision.as_str(), record.checksum.as_str()))
-            .collect();
-        let batch = store::next_batch(&pinned, &self.table).await?;
 
-        let mut result = Vec::new();
-        for file in &chain {
-            let is_target = target.as_deref() == Some(file.revision.as_str());
-            if let Some(stored) = applied.get(file.revision.as_str()) {
-                if *stored != file.checksum {
-                    self.report_mismatch(&file.revision, stored, &file.checksum)?;
+        // Serialize concurrent migrators (for example several instances booting at
+        // once during an autoscaling deploy) so they cannot race on the chain.
+        self.acquire_lock(&pinned).await?;
+        let result = async {
+            let records = store::applied_records(&pinned, &self.table).await?;
+            let applied: HashMap<&str, &str> = records
+                .iter()
+                .map(|record| (record.revision.as_str(), record.checksum.as_str()))
+                .collect();
+            let batch = store::next_batch(&pinned, &self.table).await?;
+
+            let mut result = Vec::new();
+            for file in &chain {
+                let is_target = target.as_deref() == Some(file.revision.as_str());
+                if let Some(stored) = applied.get(file.revision.as_str()) {
+                    if *stored != file.checksum {
+                        self.report_mismatch(&file.revision, stored, &file.checksum)?;
+                    }
+                    if is_target {
+                        break;
+                    }
+                    continue;
                 }
+                let elapsed = self.apply_up(&pinned, file, batch).await?;
+                result.push(Applied {
+                    revision: file.revision.clone(),
+                    name: file.name.clone(),
+                    elapsed,
+                });
                 if is_target {
                     break;
                 }
-                continue;
             }
-            let elapsed = self.apply_up(&pinned, file, batch).await?;
-            result.push(Applied {
-                revision: file.revision.clone(),
-                name: file.name.clone(),
-                elapsed,
-            });
-            if is_target {
-                break;
-            }
+            Ok(result)
         }
-        Ok(result)
+        .await;
+        self.release_lock(&pinned).await;
+        result
     }
 
     /// Reverts the most recently applied `steps` migrations.
@@ -157,26 +167,33 @@ impl FileMigrator {
         let chain = self.load_chain()?;
         let pinned = self.db.pinned().await?;
         store::ensure_table(&pinned, &self.table).await?;
-        let records = store::applied_records(&pinned, &self.table).await?;
-        let applied: HashSet<&str> = records.iter().map(|r| r.revision.as_str()).collect();
 
-        let to_revert: Vec<&MigrationFile> = chain
-            .iter()
-            .filter(|file| applied.contains(file.revision.as_str()))
-            .rev()
-            .take(steps)
-            .collect();
+        self.acquire_lock(&pinned).await?;
+        let result = async {
+            let records = store::applied_records(&pinned, &self.table).await?;
+            let applied: HashSet<&str> = records.iter().map(|r| r.revision.as_str()).collect();
 
-        let mut result = Vec::new();
-        for file in to_revert {
-            let elapsed = self.apply_down(&pinned, file).await?;
-            result.push(Applied {
-                revision: file.revision.clone(),
-                name: file.name.clone(),
-                elapsed,
-            });
+            let to_revert: Vec<&MigrationFile> = chain
+                .iter()
+                .filter(|file| applied.contains(file.revision.as_str()))
+                .rev()
+                .take(steps)
+                .collect();
+
+            let mut result = Vec::new();
+            for file in to_revert {
+                let elapsed = self.apply_down(&pinned, file).await?;
+                result.push(Applied {
+                    revision: file.revision.clone(),
+                    name: file.name.clone(),
+                    elapsed,
+                });
+            }
+            Ok(result)
         }
-        Ok(result)
+        .await;
+        self.release_lock(&pinned).await;
+        result
     }
 
     /// Reverts every applied migration.
@@ -193,8 +210,19 @@ impl FileMigrator {
             .iter()
             .position(|file| file.revision == target)
             .expect("resolved revision is in the chain");
-        // Revert everything strictly after the target.
-        let after = chain.len().saturating_sub(position + 1);
+
+        // Count only the migrations strictly after the target that are actually
+        // applied. Using the chain length here would over-count when the local
+        // chain has unapplied migrations past the target (for example after
+        // pulling a branch), making `down` revert the target itself and earlier
+        // migrations the caller meant to keep.
+        store::ensure_table(&self.db, &self.table).await?;
+        let records = store::applied_records(&self.db, &self.table).await?;
+        let applied: HashSet<&str> = records.iter().map(|r| r.revision.as_str()).collect();
+        let after = chain[position + 1..]
+            .iter()
+            .filter(|file| applied.contains(file.revision.as_str()))
+            .count();
         self.down(after).await
     }
 
@@ -304,6 +332,35 @@ impl FileMigrator {
     async fn rollback_if(&self, pinned: &Pinned, transactional: bool) {
         if transactional {
             let _ = pinned.execute(self.rollback_sql(), Vec::new()).await;
+        }
+    }
+
+    /// A stable advisory-lock key derived from the bookkeeping table name, so
+    /// every instance contends for the same lock.
+    fn lock_key(&self) -> i64 {
+        // FNV-1a over the table name.
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for byte in self.table.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        hash as i64
+    }
+
+    /// Takes the dialect's migration advisory lock, if it has one. Blocks until
+    /// granted, so concurrent migrators run one at a time.
+    async fn acquire_lock(&self, pinned: &Pinned) -> crate::Result<()> {
+        if let Some(sql) = self.db.dialect().acquire_migration_lock_sql(self.lock_key()) {
+            pinned.fetch_all(sql, Vec::new()).await?;
+        }
+        Ok(())
+    }
+
+    /// Releases the dialect's migration advisory lock (best effort; a session
+    /// lock is also dropped automatically when the connection ends).
+    async fn release_lock(&self, pinned: &Pinned) {
+        if let Some(sql) = self.db.dialect().release_migration_lock_sql(self.lock_key()) {
+            let _ = pinned.fetch_all(sql, Vec::new()).await;
         }
     }
 

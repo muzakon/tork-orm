@@ -41,7 +41,7 @@ use std::ffi::OsString;
 use std::process::ExitCode;
 
 use clap::Parser;
-use tork_orm::migration::FileMigrator;
+use tork_orm::migration::{FileMigrator, OnMismatch};
 use tork_orm::{Database, OrmError};
 
 use cli::{parse_down_target, parse_up_target, Cli, MigrateCommand, TopCommand};
@@ -110,7 +110,10 @@ pub async fn run_migrate(
     }
 
     let database = Database::connect(config.require_database_url()?, 1).await?;
-    let migrator = FileMigrator::new(database, &config.dir).table(&config.table);
+    let mut migrator = FileMigrator::new(database, &config.dir).table(&config.table);
+    if global.allow_checksum_mismatch {
+        migrator = migrator.on_checksum_mismatch(OnMismatch::Warn);
+    }
     match command {
         MigrateCommand::Status => commands::status::run(&migrator, style, &config.dir).await,
         MigrateCommand::Up { target } => {

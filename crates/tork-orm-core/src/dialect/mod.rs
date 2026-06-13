@@ -199,6 +199,25 @@ pub trait Dialect: Send + Sync + 'static {
         }
     }
 
+    /// SQL that takes a session-scoped advisory lock serializing migration runs,
+    /// or `None` if the backend serializes them another way.
+    ///
+    /// On a centralized database (PostgreSQL, MySQL), several instances starting
+    /// at once during an autoscaling deploy would otherwise run migrations
+    /// concurrently and race on the bookkeeping table. A session advisory lock,
+    /// keyed by `key` (derived from the bookkeeping table name) and released when
+    /// the connection ends, makes the others wait. SQLite returns `None`: its
+    /// file-level write lock plus the busy timeout already serialize writers.
+    fn acquire_migration_lock_sql(&self, _key: i64) -> Option<String> {
+        None
+    }
+
+    /// SQL that releases the advisory lock taken by
+    /// [`acquire_migration_lock_sql`](Dialect::acquire_migration_lock_sql).
+    fn release_migration_lock_sql(&self, _key: i64) -> Option<String> {
+        None
+    }
+
     /// Returns `true` if the backend supports choosing an index method (`USING`).
     fn supports_index_method(&self) -> bool {
         false

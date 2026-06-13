@@ -67,6 +67,16 @@ impl Dialect for MySqlDialect {
         65535
     }
 
+    fn acquire_migration_lock_sql(&self, key: i64) -> Option<String> {
+        // Named user-level lock, released when the session ends. The 60s timeout
+        // bounds how long a starting instance waits for a peer's migration run.
+        Some(format!("SELECT GET_LOCK('tork_migration_{key}', 60)"))
+    }
+
+    fn release_migration_lock_sql(&self, key: i64) -> Option<String> {
+        Some(format!("SELECT RELEASE_LOCK('tork_migration_{key}')"))
+    }
+
     fn map_sql_type(&self, ty: SqlType, out: &mut String) {
         match ty {
             // MySQL has no native boolean; `TINYINT(1)` is the conventional spelling.
@@ -189,5 +199,19 @@ mod tests {
         let dialect = MySqlDialect::new();
         assert_eq!(dialect.release_sql("sp1"), "RELEASE SAVEPOINT sp1");
         assert_eq!(dialect.rollback_to_sql("sp1"), "ROLLBACK TO SAVEPOINT sp1");
+    }
+
+    #[test]
+    fn uses_named_user_locks_for_migrations() {
+        let dialect = MySqlDialect::new();
+        assert_eq!(
+            dialect.acquire_migration_lock_sql(42).as_deref(),
+            Some("SELECT GET_LOCK('tork_migration_42', 60)")
+        );
+        assert_eq!(
+            dialect.release_migration_lock_sql(42).as_deref(),
+            Some("SELECT RELEASE_LOCK('tork_migration_42')")
+        );
+        assert_eq!(dialect.max_bind_params(), 65535);
     }
 }
