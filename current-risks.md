@@ -4,12 +4,12 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 
 ---
 
-## 1. Preloader Variable Limit Crash (Too Many SQL Variables - High Risk)
+## 1. [x] Preloader Variable Limit Crash (Too Many SQL Variables - High Risk)
 - **Risk:** When preloading a child relation, the preloader constructs an `IN` clause binding all distinct parent keys as parameters ([`preload.rs:L167`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/preload.rs#L167)).
 - **Bug:** Databases enforce limits on the maximum number of query variables (e.g., SQLite restricts this to 999 by default; MSSQL to 2100). If you preload relations for a large number of parent records (e.g., > 1000), the query will crash with a `too many SQL variables` database error.
 - **Status:** RESOLVED. The preloader chunks distinct parent keys to `Dialect::max_bind_params` (SQLite 999, PostgreSQL/MySQL 65535) and runs one batch query per chunk, merging the rows. Covered by `preload_chunks_keys_past_the_variable_limit`.
 
-## 2. Critical Data-Loss Bug in `down_to` Migration Rollback (High Risk)
+## 2. [x] Critical Data-Loss Bug in `down_to` Migration Rollback (High Risk)
 - **Risk:** The migrator's `FileMigrator::down_to` method calculates the number of steps to roll back as `chain.len().saturating_sub(position + 1)`, where `position` is the target migration's index in the local migration chain ([`files.rs:L189-199`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/migration/files.rs#L189-L199)).
 - **Bug:** This count represents the total number of files *conceptually* following the target in the local chain, regardless of whether they have been applied. If there are new, unapplied migrations at the end of the local chain, this step count will be larger than the actual number of applied migrations after the target. When calling `self.down(after)`, the runner will roll back the latest `after` applied migrations, meaning it will roll back the target itself and even earlier applied migrations that the user intended to preserve.
 - **Consequence:** Under common developer scenarios (e.g. pulling a new branch containing new unapplied migrations, then attempting to roll back a local applied migration to resolve conflicts), developers will experience silent, unexpected data loss in earlier migrations.
@@ -20,7 +20,7 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **Vulnerability:** In serverless stateless environments (such as AWS Fargate, GCP Cloud Run, or GCP App Engine), container filesystems are completely ephemeral and scale to zero. Any write operation to a local SQLite database file is lost upon container shutdown or rotation. Moreover, if multiple container instances scale out to handle high traffic concurrently, each instance writes to its own isolated database file, leading to divergent "split-brain" states.
 - **Status:** Untested and unsupported without a centralized database backend or a network mount.
 
-## 4. Lack of Distributed Migration Lock / Race Conditions (High Risk / Concurrency Hazard)
+## 4. [x] Lack of Distributed Migration Lock / Race Conditions (High Risk / Concurrency Hazard)
 - **Risk:** The migration runner executes DDL statements and registers status inside transactions but does not apply any distributed lock or database-level lock during migration execution.
 - **Vulnerability:** In serverless environments, deploying a new version often triggers multiple container instances to spin up concurrently. If migrations run automatically on startup, multiple containers will run `migrator.up()` at the exact same moment. This creates lock contentions on `_tork_migrations` or duplicate DDL commands, causing container crashes and deployment boot loops.
 - **Status:** RESOLVED. `FileMigrator` takes a session advisory lock around up/down (PostgreSQL `pg_advisory_lock`, MySQL `GET_LOCK`, keyed by the bookkeeping table; released when the connection ends). Concurrent migrators serialize instead of racing. SQLite relies on its file-level write lock + busy timeout (dialect returns no lock SQL). Covered by `uses_session_advisory_locks_for_migrations` / `uses_named_user_locks_for_migrations`.
@@ -30,29 +30,29 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **Vulnerability:** If models are defined in a separate library crate in a multi-crate workspace, and the main binary does not directly reference symbols inside the model library, the Rust compiler/linker's dead-code elimination will silently strip the static registration symbols. As a result, `migrate generate` will fail to detect any of the models defined in the library, and no database tables will be generated for them.
 - **Status:** Untested and unhandled.
 
-## 6. Hardcoded SQLite `RETURNING` Support (High SQLite Version Hazard)
+## 6. [x] Hardcoded SQLite `RETURNING` Support (High SQLite Version Hazard)
 - **Risk:** `SqliteDialect::supports_returning` is hardcoded to return `true` ([`sqlite.rs:L58-60`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/dialect/sqlite.rs#L58-L60)).
 - **Vulnerability:** SQLite added support for the `RETURNING` clause in version 3.35.0 (released in 2021). If this ORM is compiled/deployed in environments with older system SQLite libraries (e.g. CentOS 8, RHEL 8, Debian 10, or older container images running musl/glibc), all insert operations will fail immediately with syntax errors.
 - **Status:** RESOLVED. `SqliteDialect::supports_returning` now returns `rusqlite::version_number() >= 3_035_000`, so a build linking an older system SQLite falls back to a re-select instead of failing every insert. Covered by `returning_support_follows_the_runtime_sqlite_version`.
 
-## 7. Unimplemented Transaction Options & Standard Isolation Levels (High Risk / Feature Deficit)
+## 7. [x] Unimplemented Transaction Options & Standard Isolation Levels (High Risk / Feature Deficit)
 - **Risk:** While standard SQL isolation levels and option builders are commonly needed for multi-dialect production databases, they are **entirely missing** from the codebase:
   - **No `TransactionOptions` Struct:** The builder-style configuration struct (`TransactionOptions::new().isolation(...).read_only(...)`) does not exist.
   - **No Standard SQL Isolation Levels:** The proposed `IsolationLevel` variants (`ReadUncommitted`, `ReadCommitted`, `RepeatableRead`, `Serializable`) are not defined. The codebase only implements SQLite-specific locking states (`Deferred`, `Immediate`, `Exclusive`).
 - **Status:** RESOLVED. `IsolationLevel` now includes the standard SQL levels (`ReadUncommitted`/`ReadCommitted`/`RepeatableRead`/`Serializable`) with `TransactionBuilder` methods (`.read_committed()`, `.serializable()`, ...). Each dialect maps them: PostgreSQL `BEGIN ISOLATION LEVEL ...`, MySQL a `SET TRANSACTION ISOLATION LEVEL ...` preamble (`Dialect::isolation_setup_sql`), SQLite a plain `BEGIN` (it is serializable via its locking). Covered by `standard_isolation_levels_render_directly` / `standard_isolation_levels_use_a_set_statement` / `serializable_isolation_runs_on_sqlite`.
 
-## 8. Lack of Retryable Transaction API (High Risk / Feature Deficit)
+## 8. [x] Lack of Retryable Transaction API (High Risk / Feature Deficit)
 - **Risk:** Under serializable isolation levels or heavy write concurrency, database queries frequently fail with deadlock or serialization conflicts. Without a retry mechanism, the application will crash or return HTTP 500 errors to clients.
 - **Vulnerability:** The proposed `transaction_retry` and `TransactionRetry` APIs are **entirely unimplemented**. Developers must write custom loop logic manually to handle and retry serialization failures.
 - **Status:** RESOLVED. `Database::transaction_retry(max_attempts, f)` reruns the closure in a fresh transaction when it fails with a transient conflict, detected by `OrmError::is_retryable()` (lock timeout, deadlock, or serialization failure, across backends). Covered by `transaction_retry_recovers_from_a_transient_conflict` and `transaction_retry_gives_up_on_a_non_retryable_error`.
 
-## 9. Future Cancellation Connection Leak & Pool Starvation (High Risk / Resource Exhaustion)
+## 9. [x] Future Cancellation Connection Leak & Pool Starvation (High Risk / Resource Exhaustion)
 - **Risk:** When a database query is cancelled due to a client timeout or future cancellation (e.g., via `tokio::time::timeout`), the underlying `tokio::task::spawn_blocking` worker continues executing to completion. However, because the cancelled query future was dropped, the `PinnedSqlite` handle is dropped.
 - **Bug:** During query execution, the connection is taken out of `PinnedSqlite` (`self.conn` is `None`). When `PinnedSqlite` drops prematurely during cancellation, its `Drop` implementation sees `None` and does not return the connection to the pool. When the background thread finally completes, the connection is discarded and closed.
 - **Consequence:** Under frequent request timeouts or cancellations, connection handles are permanently lost from the pool, causing massive performance thrashing as new connections are opened and configured continually, leading to thread and descriptor exhaustion.
 - **Status:** RESOLVED. The blocking worker now returns the connection to the pool itself and reports the result over a channel, so a cancelled query future no longer drops the connection. The pinned-connection (transaction) path restores its connection through a shared slot for the same reason. Covered by `cancelled_query_returns_its_connection_to_the_pool`.
 
-## 10. Bulk Create Variable Limit Crash (Too Many SQL Variables - High Risk)
+## 10. [x] Bulk Create Variable Limit Crash (Too Many SQL Variables - High Risk)
 - **Risk:** The bulk creation implementation [`model.rs:L212-241`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/model.rs#L212-L241) generates a single multi-row `INSERT` statement containing all fields for all rows in a single batch.
 - **Bug:** The number of variables bound in this query is `values.len() * columns.len()`. If this number exceeds the database-enforced parameter limit (e.g. 999 parameters in SQLite), the query will immediately crash with a database error.
 - **Consequence:** Inserting large datasets (e.g. 500 records with 3 columns each) via `bulk_create` will crash the application in production unless developers manually chunk the inputs.
@@ -63,29 +63,29 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **Vulnerability:** If two developers generate migrations in parallel on different Git branches, both migrations will use the same `down_revision` parent. Upon merging to `main`, the migration chain branches. The migrator will immediately block execution and fail with the error `branching not supported yet: two migrations follow {parent}`.
 - **Status:** Untested for automated recovery. Developers must manually edit SQL file headers to re-linearize the chain before they can deploy.
 
-## 12. Permissive Checksum Mismatch Policy in Production (Medium Risk)
+## 12. [x] Permissive Checksum Mismatch Policy in Production (Medium Risk)
 - **Risk:** If a migration file is modified after it has already been applied, the migrator compares its hash against the database registry ([`files.rs:L133-136`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/migration/files.rs#L133-L136)).
 - **Vulnerability:** The default action for a mismatch is `OnMismatch::Warn`, which prints a warning to stderr and proceeds. In production, this can lead to silent schema drifts if developers accidentally modify applied migrations, eventually causing runtime queries to fail.
 - **Status:** RESOLVED. The default is now `OnMismatch::Error` (both `FileMigrator` and `Migrator`): an edited applied migration aborts the run. The CLI exposes `--allow-checksum-mismatch` to downgrade to a warning for local development. Covered by `editing_an_applied_migration_aborts_up_by_default` and `changed_checksum_errors_by_default_and_warn_overrides`.
 
-## 13. SQL Injection Bypass via Dialect Escaping (High Security Risk)
+## 13. [x] SQL Injection Bypass via Dialect Escaping (High Security Risk)
 - **Risk:** In [`writer.rs`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/dialect/writer.rs#L419-L428), `quote_string_literal` escapes strings by only doubling single quotes (`'`).
 - **Vulnerability:** 
   - On **MySQL**, backslash (`\`) acts as an escape character inside single-quoted strings by default. A string containing a backslash followed by a single quote can bypass the doubled-quote escape mechanism, leading to **SQL injection** when rendering inline values (such as in partial index predicates or DDL statements).
   - On **PostgreSQL**, if the connection is configured with `standard_conforming_strings = off`, backslash escapes are enabled, causing a similar SQL injection vulnerability.
 - **Status:** RESOLVED. Inline string escaping is now dialect-aware via `Dialect::escape_string_literal`: MySQL also doubles backslashes (`quote_string_literal_mysql`), closing the backslash-before-quote bypass. PostgreSQL/SQLite keep quote-doubling (Tork assumes the default `standard_conforming_strings = on`). Covered by `mysql_escapes_backslashes_in_string_literals` / `sqlite_does_not_escape_backslashes`.
 
-## 14. SQL Injection via Unescaped Scalar Function Names (High Security Risk)
+## 14. [x] SQL Injection via Unescaped Scalar Function Names (High Security Risk)
 - **Risk:** The SQL expression writer [`writer.rs:L133-143`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/dialect/writer.rs#L133-L143) handles function calls (`Expr::Func`) by rendering the function name verbatim using `self.push_sql(name)`.
 - **Vulnerability:** There is no escaping or quoting applied to the function name itself. If the application dynamically constructs queries using runtime-supplied string values as function names (e.g., dynamic database-side transformations guided by user input), an attacker can supply malicious SQL payloads that bypass filter constructs.
 - **Status:** RESOLVED. `Expr::Func` names are written through `push_function_name`, which keeps only identifier-safe characters (`[A-Za-z0-9_.]`), so a name built from untrusted input is neutralized into a harmless unknown-function token instead of injecting SQL. Covered by `function_names_cannot_inject_sql`.
 
-## 15. Path Traversal & Arbitrary File Creation in Connection Strings (High Security Risk)
+## 15. [x] Path Traversal & Arbitrary File Creation in Connection Strings (High Security Risk)
 - **Risk:** The SQLite connection path parsing in [`sqlite.rs:L223-239`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/driver/sqlite.rs#L223-L239) does not sanitize or restrict the parsed database path.
 - **Vulnerability:** If an application allows dynamic database URLs (e.g., in multi-tenant environments where the database name is derived from user input or request headers), a user can supply path traversal components (like `sqlite://../../../../etc/passwd` or `sqlite://var/lib/malicious.db`). SQLite will attempt to create or write to that file location, allowing arbitrary file creation or file corruption.
 - **Status:** RESOLVED. SQLite connection-path parsing rejects `..` (parent-directory) components, so a path derived from untrusted input cannot escape to an arbitrary file; absolute paths chosen by the application are still allowed. Covered by `rejects_parent_directory_traversal_in_the_path`.
 
-## 16. Concurrent Queries on Transaction Handles (Critical Concurrency Hazard)
+## 16. [x] Concurrent Queries on Transaction Handles (Critical Concurrency Hazard)
 - **Risk:** The transaction wrapper [`PinnedSqlite`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/driver/sqlite.rs#L336-L340) locks and takes (`Option::take`) the inner connection out of the mutex for the duration of a `spawn_blocking` query, returning it only when the query finishes.
 - **Bug:** If a user tries to execute two queries concurrently on the same transaction object (for instance, using `tokio::join!` or spawning multiple futures using the same `tx` reference):
   ```rust
@@ -97,7 +97,7 @@ This document lists the components, edge cases, and features of Tork ORM that ar
   the second query will immediately fail with the error `pinned connection is already in use` instead of waiting for the connection to be returned.
 - **Status:** RESOLVED. `PinnedSqlite` now holds an async gate (`tokio::sync::Mutex`) that each operation locks for its duration, so concurrent statements on the same transaction (for example via `tokio::join!`) serialize and queue instead of failing with `pinned connection is already in use`. Covered by `concurrent_queries_on_a_transaction_serialize`.
 
-## 17. Preloading Type Lookup Collision (Critical Bug)
+## 17. [x] Preloading Type Lookup Collision (Critical Bug)
 - **Risk:** The preloader uses a `HashMap<TypeId, Box<dyn Any>>` to attach preloaded relation slices to parent models (implemented in [`preload.rs`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/preload.rs#L71-L85)).
 - **Bug:** If a model has **multiple relations referencing the same child model type** (e.g., a `Post` model with an `author` relation pointing to `User` and a `reviewer` relation also pointing to `User`), preloading both:
   ```rust
@@ -106,12 +106,12 @@ This document lists the components, edge cases, and features of Tork ORM that ar
   will cause a key collision. The second preload step silently overwrites the first in the `relations` map. When calling `.get::<User>()`, the parent will only return the second relation's slice.
 - **Status:** RESOLVED. The `relations` map is now keyed by relation identity (type plus join columns), so each relation keeps its own slot. `get_via(&relation)` reads a specific relation's rows; `get::<C>()` still works for the single-relation case. Covered by `two_relations_to_the_same_type_keep_separate_slots`.
 
-## 18. Infinite Hang on Pool Exhaustion (High Risk)
+## 18. [x] Infinite Hang on Pool Exhaustion (High Risk)
 - **Risk:** When all connections in the pool are checked out, calling `pool.acquire_pinned()` or `pool.with_connection()` waits on the semaphore permit indefinitely ([`sqlite.rs:L186`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/driver/sqlite.rs#L186)).
 - **Vulnerability:** If there is a connection leak in the application or if execution gets blocked, checking out a connection will hang the entire thread/request indefinitely. Gaining access to a timeout-bounded checkout is currently impossible.
 - **Status:** RESOLVED. Connection checkout is bounded by a timeout (default 30s, configurable via `SqlitePool::with_acquire_timeout`); exceeding it returns a clear timeout error instead of hanging. Covered by `checkout_times_out_instead_of_hanging_forever`.
 
-## 19. Persistent Broken Connection Poisoning (High Risk)
+## 19. [x] Persistent Broken Connection Poisoning (High Risk)
 - **Risk:** If a connection in the pool hits a terminal database error (e.g. connection timeout, corrupted file, or disk-full error), the driver still returns the connection handle back into the idle pool [`sqlite.rs:L209-211`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/driver/sqlite.rs#L209-L211).
 - **Bug:** There is no health check, validation query, or connection recycling logic. Once a connection goes bad, it will continuously be checked out from the pool and fail every subsequent query that is routed to it.
 - **Status:** RESOLVED. After a query error, the pooled connection is health-probed (`SELECT 1`) before being returned: a healthy connection (ordinary query error) is reused, but one poisoned by a terminal error fails the probe and is discarded instead of returned, so a broken connection no longer fails every later query routed to it. Covered by `a_query_error_keeps_a_healthy_connection`.
@@ -124,7 +124,7 @@ This document lists the components, edge cases, and features of Tork ORM that ar
   - **SQLite-Centric Isolation Levels:** The `IsolationLevel` enum ([`transaction.rs`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/transaction.rs#L60-L78)) hardcodes SQLite-specific locking modes (`Deferred`, `Immediate`, `Exclusive`) instead of standard SQL isolation levels (e.g., `READ COMMITTED`, `SERIALIZABLE`), forcing other dialects to use stubs or map them incorrectly.
 - **Status:** Adding a new dialect requires modifying the core engine code in multiple places, violating the Open-Closed principle.
 
-## 21. Non-Integer Primary Keys on Non-`RETURNING` Dialects (High Risk / Bug)
+## 21. [x] Non-Integer Primary Keys on Non-`RETURNING` Dialects (High Risk / Bug)
 - **Risk:** If a dialect does not support `RETURNING` statements, `Model::create` executes the insert and then re-selects the row using SQLite's `last_insert_rowid` coerced into a `Value::Int` (implemented in [`model.rs`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/model.rs#L183-L205)).
 - **Bug:** If the table uses a non-integer primary key (like a UUID `TEXT` or a `VARCHAR` string) on a database without `RETURNING`, `last_insert_rowid` will not match the primary key value. The reload step will fetch the wrong row or fail with a `not found` error.
 - **Status:** RESOLVED. On a non-`RETURNING` dialect, `Model::create` reloads by the supplied primary-key value when it is non-integer (a UUID or string), instead of `last_insert_rowid` which only matches an integer key. Covered by `create_with_a_string_primary_key_reloads_by_value` (MySQL live test).
@@ -244,7 +244,7 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **Vulnerability:** Although the pool clamps connection size to 1 for in-memory targets, if the connection pool is closed (`pool.close()`) or if the single connection fails and is pruned/recreated by the driver, the entire database schema and data are silently lost.
 - **Status:** Untested database lifecycle boundary.
 
-## 49. Lack of Transaction Propagation / Nested Transaction API (Medium Risk / Feature Deficit)
+## 49. [x] Lack of Transaction Propagation / Nested Transaction API (Medium Risk / Feature Deficit)
 - **Risk:** The transaction API only exposes top-level transactions and savepoints. It lacks standardized transaction propagation strategies (such as `PROPAGATION_REQUIRED` or `PROPAGATION_REQUIRES_NEW`).
 - **DX Gap:** Developers cannot write modular transactional services where internal helpers dynamically join an active transaction or suspend it to open a new nested context, requiring manual handle passing and custom savepoint coordination.
 - **Status:** RESOLVED (by design). Nested transactional units are provided by `Transaction::savepoint(f)`, which runs `f` inside a `SAVEPOINT` released on `Ok` and rolled back on `Err` without aborting the outer transaction (a `REQUIRES_NEW`-style nested unit). The `REQUIRED` pattern (join the active transaction) is the default: pass the same `&Transaction` (or `impl Executor`) down. Tork's explicit handle-passing replaces implicit propagation strategies. Covered by the savepoint transaction tests.

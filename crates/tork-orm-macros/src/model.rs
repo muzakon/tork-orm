@@ -446,7 +446,14 @@ impl Parse for FieldArgs {
                     }
                     content.parse::<Token![=]>()?;
                     let lit: LitInt = content.parse()?;
-                    args.varchar_len = Some(lit.base10_parse()?);
+                    let len: u32 = lit.base10_parse()?;
+                    if len == 0 {
+                        return Err(syn::Error::new(
+                            lit.span(),
+                            "varchar length must be > 0",
+                        ));
+                    }
+                    args.varchar_len = Some(len);
                 }
                 "foreign_key" => {
                     input.parse::<Token![=]>()?;

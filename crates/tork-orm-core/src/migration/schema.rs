@@ -639,6 +639,7 @@ impl Column {
 
     /// Sets the type to bounded text of at most `length`.
     pub fn varchar(mut self, length: u32) -> Self {
+        debug_assert!(length > 0, "varchar length must be > 0");
         self.spec.ty = SqlType::Varchar(length);
         self
     }

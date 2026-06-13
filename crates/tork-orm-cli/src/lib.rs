@@ -114,6 +114,9 @@ pub async fn run_migrate(
     if global.allow_checksum_mismatch {
         migrator = migrator.on_checksum_mismatch(OnMismatch::Warn);
     }
+    if global.allow_destructive {
+        migrator = migrator.allow_destructive(true);
+    }
     match command {
         MigrateCommand::Status => commands::status::run(&migrator, style, &config.dir).await,
         MigrateCommand::Up { target } => {

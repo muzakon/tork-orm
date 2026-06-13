@@ -75,6 +75,7 @@ pub struct FileMigrator {
     dir: PathBuf,
     table: String,
     on_mismatch: OnMismatch,
+    allow_destructive: bool,
 }
 
 impl FileMigrator {
@@ -85,6 +86,7 @@ impl FileMigrator {
             dir: dir.into(),
             table: "_tork_migrations".to_string(),
             on_mismatch: OnMismatch::Error,
+            allow_destructive: false,
         }
     }
 
@@ -99,6 +101,14 @@ impl FileMigrator {
     /// silently drift in production).
     pub fn on_checksum_mismatch(mut self, on_mismatch: OnMismatch) -> Self {
         self.on_mismatch = on_mismatch;
+        self
+    }
+
+    /// Allows destructive statements (`DROP TABLE`, `DROP COLUMN`) in
+    /// migrations (default `false`). Migrations with destructive SQL abort
+    /// at run time when this is `false`; pass `true` to opt in.
+    pub fn allow_destructive(mut self, allow: bool) -> Self {
+        self.allow_destructive = allow;
         self
     }
 
@@ -266,6 +276,11 @@ impl FileMigrator {
         file: &MigrationFile,
         batch: i64,
     ) -> crate::Result<Duration> {
+        if !self.allow_destructive && is_destructive(&file.up_sql) {
+            return Err(OrmError::configuration(
+                "cannot run destructive migration without --allow-destructive",
+            ));
+        }
         if file.transactional {
             pinned.execute(self.begin_sql(), Vec::new()).await?;
         }
@@ -395,6 +410,17 @@ impl FileMigrator {
     fn load_chain(&self) -> crate::Result<Vec<MigrationFile>> {
         build_chain(load_dir(&self.dir)?)
     }
+}
+
+/// Returns `true` if `sql` contains a destructive statement
+/// (`DROP TABLE` or `DROP COLUMN`). The check is intentionally simple: a
+/// case-insensitive substring match against the unparameterized raw text
+/// of the migration. It cannot catch every possible data-destroying
+/// statement (for example a `TRUNCATE` or a hand-written `DELETE`), but
+/// it covers the two the production-readiness checklist calls out.
+fn is_destructive(sql: &str) -> bool {
+    let upper = sql.to_uppercase();
+    upper.contains("DROP TABLE") || upper.contains("DROP COLUMN")
 }
 
 /// Returns the head revision of the chain in `dir` — the last migration — or

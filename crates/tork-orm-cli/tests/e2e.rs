@@ -121,3 +121,78 @@ fn create_scaffolds_a_chained_migration() {
     let second_content = std::fs::read_to_string(dir.join(second)).unwrap();
     assert!(second_content.contains(&format!("-- down_revision: {first_revision}")));
 }
+
+#[test]
+fn destructive_migration_fails_without_allow_destructive() {
+    let temp = tempdir().unwrap();
+    let migrations = temp.path().join("migrations");
+    std::fs::create_dir_all(&migrations).unwrap();
+    let dir = migrations.to_str().unwrap();
+    let db_url = format!("sqlite://{}/app.db", temp.path().display());
+
+    write_migration(
+        &migrations,
+        "cccc55556666",
+        "",
+        "drop_legacy",
+        "DROP TABLE legacy;",
+        "CREATE TABLE legacy (id INTEGER PRIMARY KEY);",
+    );
+
+    // Default (no flag): destructive `DROP TABLE` is refused.
+    let output = tork_orm()
+        .args(["migrate", "-d", &db_url, "--dir", dir, "up"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "destructive migration should fail by default");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("destructive"),
+        "expected error to mention destructive, got: {combined}"
+    );
+}
+
+#[test]
+fn destructive_migration_succeeds_with_allow_destructive() {
+    let temp = tempdir().unwrap();
+    let migrations = temp.path().join("migrations");
+    std::fs::create_dir_all(&migrations).unwrap();
+    let dir = migrations.to_str().unwrap();
+    let db_url = format!("sqlite://{}/app.db", temp.path().display());
+
+    // A non-destructive migration that creates the table first, then a
+    // destructive one that drops it. We exercise the flag against the
+    // second migration so the underlying DROP actually succeeds.
+    write_migration(
+        &migrations,
+        "dddd77778888",
+        "",
+        "create_legacy",
+        "CREATE TABLE legacy (id INTEGER PRIMARY KEY);",
+        "DROP TABLE legacy;",
+    );
+    write_migration(
+        &migrations,
+        "eeee99990000",
+        "dddd77778888",
+        "drop_legacy",
+        "DROP TABLE legacy;",
+        "CREATE TABLE legacy (id INTEGER PRIMARY KEY);",
+    );
+
+    // With the flag: both migrations run, including the destructive second.
+    let output = tork_orm()
+        .args(["migrate", "-d", &db_url, "--dir", dir, "--allow-destructive", "up"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "destructive migration should succeed with --allow-destructive, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Applied 2 migrations"));
+}

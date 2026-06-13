@@ -322,6 +322,11 @@ fn render_default(dialect: &dyn Dialect, default: &DefaultValue, out: &mut Strin
         DefaultValue::Text(value) => dialect.escape_string_literal(value, out),
         DefaultValue::CurrentTimestamp => out.push_str("CURRENT_TIMESTAMP"),
         DefaultValue::Null => out.push_str("NULL"),
+        DefaultValue::Uuid => match dialect.kind() {
+            DialectKind::Postgres => out.push_str("gen_random_uuid()"),
+            DialectKind::Sqlite => out.push_str("(lower(hex(randomblob(16))))"),
+            DialectKind::Mysql => out.push_str("UUID()"),
+        },
         DefaultValue::Raw(sql) => out.push_str(sql),
     }
 }

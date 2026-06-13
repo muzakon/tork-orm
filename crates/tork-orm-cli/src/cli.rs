@@ -73,6 +73,12 @@ pub struct GlobalArgs {
     #[arg(long, global = true)]
     pub allow_checksum_mismatch: bool,
 
+    /// Allow destructive statements (`DROP TABLE`, `DROP COLUMN`) in
+    /// migrations (default: abort). Required when applying a migration
+    /// that destroys data; production deploys should never set this.
+    #[arg(long, global = true)]
+    pub allow_destructive: bool,
+
     /// Disable colored output.
     #[arg(long, global = true)]
     pub no_color: bool,

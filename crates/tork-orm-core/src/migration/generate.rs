@@ -274,7 +274,7 @@ fn push_statement(out: &mut String, statement: &str) {
 fn column_default_ddl(default: Option<crate::ColumnDefault>) -> Option<DefaultValue> {
     match default? {
         crate::ColumnDefault::CurrentTimestamp => Some(DefaultValue::CurrentTimestamp),
-        crate::ColumnDefault::Uuid => Some(DefaultValue::Raw("gen_random_uuid()".to_string())),
+        crate::ColumnDefault::Uuid => Some(DefaultValue::Uuid),
         crate::ColumnDefault::Raw(sql) => Some(DefaultValue::Raw(sql.to_string())),
     }
 }
