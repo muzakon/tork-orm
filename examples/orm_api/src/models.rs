@@ -10,12 +10,18 @@ use tork_orm::prelude::*;
 #[derive(Debug, Clone, Model)]
 #[table(name = "users")]
 pub struct User {
+    // Identity
     #[field(primary_key, auto)]
     pub id: i64,
+
+    // Authentication
     #[field(varchar(length = 50), unique)]
     pub username: String,
+
     #[field(varchar(length = 255), unique)]
     pub email: String,
+
+    // Flags
     pub is_active: bool,
 }
 
@@ -28,11 +34,18 @@ pub struct User {
     index(fields = [user_id, view_count(desc)]),
 ])]
 pub struct Post {
+    // Identity
     #[field(primary_key, auto)]
     pub id: i64,
+
+    // Relations
     #[field(foreign_key = User::id)]
     pub user_id: i64,
+
+    // Content
     pub title: String,
+
+    // Stats
     pub view_count: i64,
 }
 
