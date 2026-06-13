@@ -89,6 +89,36 @@ impl OrmError {
         &self.message
     }
 
+    /// Returns `true` if this looks like a transient conflict worth retrying — a
+    /// lock timeout, deadlock, or serialization failure — across backends.
+    ///
+    /// Used by [`Database::transaction_retry`](crate::Database::transaction_retry).
+    /// Detection is heuristic (matched against the message and source chain), since
+    /// each driver reports these conditions differently.
+    pub fn is_retryable(&self) -> bool {
+        use std::error::Error;
+
+        let mut text = self.message.to_lowercase();
+        let mut source = self.source();
+        while let Some(error) = source {
+            text.push(' ');
+            text.push_str(&error.to_string().to_lowercase());
+            source = error.source();
+        }
+
+        const MARKERS: [&str; 8] = [
+            "database is locked",
+            "deadlock",
+            "serialization",
+            "could not serialize",
+            "lock wait timeout",
+            "sqlite_busy",
+            "40001", // PostgreSQL serialization_failure
+            "40p01", // PostgreSQL deadlock_detected
+        ];
+        MARKERS.iter().any(|marker| text.contains(marker))
+    }
+
     /// Builds a [`ErrorKind::Connection`] error.
     pub fn connection(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Connection, message)

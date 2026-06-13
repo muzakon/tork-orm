@@ -93,6 +93,9 @@ impl Dialect for SqliteDialect {
             IsolationLevel::Deferred => "BEGIN DEFERRED".to_string(),
             IsolationLevel::Immediate => "BEGIN IMMEDIATE".to_string(),
             IsolationLevel::Exclusive => "BEGIN EXCLUSIVE".to_string(),
+            // SQLite is effectively serializable through its locking, so the
+            // standard levels map to a plain BEGIN (the closest it offers).
+            _ => "BEGIN".to_string(),
         }
     }
 }

@@ -75,6 +75,28 @@ pub enum IsolationLevel {
     /// No other connection can read or write until this transaction ends. Use
     /// sparingly; it prevents all concurrent access to the database.
     Exclusive,
+    /// Standard SQL `READ UNCOMMITTED` (dirty reads allowed).
+    ReadUncommitted,
+    /// Standard SQL `READ COMMITTED`.
+    ReadCommitted,
+    /// Standard SQL `REPEATABLE READ`.
+    RepeatableRead,
+    /// Standard SQL `SERIALIZABLE` (the strictest level).
+    Serializable,
+}
+
+impl IsolationLevel {
+    /// The standard SQL name for a standard isolation level, or `None` for the
+    /// SQLite-specific lock modes.
+    pub fn standard_sql(self) -> Option<&'static str> {
+        match self {
+            IsolationLevel::ReadUncommitted => Some("READ UNCOMMITTED"),
+            IsolationLevel::ReadCommitted => Some("READ COMMITTED"),
+            IsolationLevel::RepeatableRead => Some("REPEATABLE READ"),
+            IsolationLevel::Serializable => Some("SERIALIZABLE"),
+            IsolationLevel::Deferred | IsolationLevel::Immediate | IsolationLevel::Exclusive => None,
+        }
+    }
 }
 
 /// An open database transaction.
@@ -265,6 +287,53 @@ impl Database {
         }
     }
 
+    /// Runs `f` inside a transaction, retrying up to `max_attempts` times when it
+    /// fails with a transient conflict — a lock timeout, deadlock, or
+    /// serialization failure (see [`OrmError::is_retryable`](crate::OrmError::is_retryable)).
+    ///
+    /// Under serializable isolation or heavy write contention the database may
+    /// abort a transaction and expect the client to retry. `f` may run more than
+    /// once, so it must be safe to re-run (idempotent in its in-memory effects).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use tork_orm_core::{Database, Executor};
+    ///
+    /// # async fn run() -> tork_orm_core::Result<()> {
+    /// let db = Database::connect("sqlite::memory:", 1).await?;
+    /// db.transaction_retry(5, |tx| Box::pin(async move {
+    ///     tx.execute("UPDATE accounts SET balance = balance - 10 WHERE id = 1".into(), vec![]).await?;
+    ///     Ok(())
+    /// })).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn transaction_retry<F, R>(&self, max_attempts: u32, f: F) -> crate::Result<R>
+    where
+        F: for<'a> Fn(&'a Transaction) -> BoxFuture<'a, crate::Result<R>>,
+        R: Send + 'static,
+    {
+        let attempts = max_attempts.max(1);
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let mut tx = self.begin().await?;
+            let outcome = match f(&tx).await {
+                Ok(value) => tx.commit().await.map(|()| value),
+                Err(error) => {
+                    let _ = tx.rollback().await;
+                    Err(error)
+                }
+            };
+            match outcome {
+                Ok(value) => return Ok(value),
+                Err(error) if attempt < attempts && error.is_retryable() => continue,
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
     /// Opens a new transaction on a pinned connection.
     ///
     /// Runs `BEGIN` on the connection and returns a [`Transaction`] handle.
@@ -350,6 +419,30 @@ impl<'db> TransactionBuilder<'db> {
         self
     }
 
+    /// Requests the standard SQL `READ UNCOMMITTED` isolation level.
+    pub fn read_uncommitted(mut self) -> Self {
+        self.level = IsolationLevel::ReadUncommitted;
+        self
+    }
+
+    /// Requests the standard SQL `READ COMMITTED` isolation level.
+    pub fn read_committed(mut self) -> Self {
+        self.level = IsolationLevel::ReadCommitted;
+        self
+    }
+
+    /// Requests the standard SQL `REPEATABLE READ` isolation level.
+    pub fn repeatable_read(mut self) -> Self {
+        self.level = IsolationLevel::RepeatableRead;
+        self
+    }
+
+    /// Requests the standard SQL `SERIALIZABLE` isolation level (the strictest).
+    pub fn serializable(mut self) -> Self {
+        self.level = IsolationLevel::Serializable;
+        self
+    }
+
     /// Opens the transaction with the configured isolation level.
     ///
     /// # Errors
@@ -359,6 +452,11 @@ impl<'db> TransactionBuilder<'db> {
     /// lock and the busy timeout expires).
     pub async fn begin(self) -> crate::Result<Transaction> {
         let pinned = self.db.pinned().await?;
+        // Some backends (MySQL) configure the isolation level in a separate
+        // statement that applies to the next transaction, run before the BEGIN.
+        if let Some(setup) = pinned.dialect().isolation_setup_sql(self.level) {
+            pinned.execute(setup, vec![]).await?;
+        }
         let sql = pinned.dialect().begin_with_sql(self.level);
         pinned.execute(sql, vec![]).await?;
         Ok(Transaction::new(pinned))

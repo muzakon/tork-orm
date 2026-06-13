@@ -101,6 +101,33 @@ You can configure transaction locking behavior (isolation levels) using the `tra
 | `IMMEDIATE` | `.immediate()` | Acquires a write lock immediately. Other writers are blocked, but concurrent readers can proceed. |
 | `EXCLUSIVE` | `.exclusive()` | Acquires an exclusive lock immediately, preventing all concurrent reads and writes. |
 
+The **standard SQL isolation levels** are also available and map per dialect
+(PostgreSQL `BEGIN ISOLATION LEVEL ...`, MySQL `SET TRANSACTION ISOLATION LEVEL ...`;
+SQLite is serializable through its locking, so they fall back to a plain `BEGIN`):
+
+| Method | Level |
+|---|---|
+| `.read_uncommitted()` | `READ UNCOMMITTED` |
+| `.read_committed()` | `READ COMMITTED` |
+| `.repeatable_read()` | `REPEATABLE READ` |
+| `.serializable()` | `SERIALIZABLE` |
+
+### Retrying on conflicts
+
+Under `SERIALIZABLE` or heavy write contention the database may abort a transaction
+and expect the client to retry. `Database::transaction_retry(max_attempts, f)` reruns
+the closure in a fresh transaction when it fails with a transient conflict (a lock
+timeout, deadlock, or serialization failure, detected by `OrmError::is_retryable()`).
+The closure may run more than once, so keep its in-memory effects idempotent.
+
+```rust
+db.transaction_retry(5, |tx| Box::pin(async move {
+    tx.execute("UPDATE accounts SET balance = balance - 10 WHERE id = 1".into(), vec![]).await?;
+    Ok(())
+}))
+.await?;
+```
+
 ### Example
 
 ```rust

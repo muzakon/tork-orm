@@ -156,6 +156,14 @@ pub trait Dialect: Send + Sync + 'static {
     /// Most backends map this to `BEGIN` (ignoring the level) unless they have a
     /// matching SQL form. SQLite overrides this to support `BEGIN DEFERRED`,
     /// `BEGIN IMMEDIATE`, and `BEGIN EXCLUSIVE`.
+    /// A statement run before [`begin_with_sql`](Dialect::begin_with_sql) to
+    /// configure the isolation level, or `None` if the level is set inline in the
+    /// BEGIN. MySQL returns a `SET TRANSACTION ISOLATION LEVEL ...` for standard
+    /// levels; other backends fold it into the BEGIN.
+    fn isolation_setup_sql(&self, _level: crate::transaction::IsolationLevel) -> Option<String> {
+        None
+    }
+
     fn begin_with_sql(&self, _level: crate::transaction::IsolationLevel) -> String {
         "BEGIN".to_string()
     }

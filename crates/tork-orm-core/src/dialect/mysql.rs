@@ -123,10 +123,18 @@ impl Dialect for MySqlDialect {
         "START TRANSACTION"
     }
 
+    fn isolation_setup_sql(&self, level: IsolationLevel) -> Option<String> {
+        // MySQL configures the isolation level in a separate statement that applies
+        // to the next transaction. The SQLite lock modes have no standard name, so
+        // they leave MySQL's default (REPEATABLE READ) in place.
+        level
+            .standard_sql()
+            .map(|name| format!("SET TRANSACTION ISOLATION LEVEL {name}"))
+    }
+
     fn begin_with_sql(&self, _level: IsolationLevel) -> String {
-        // MySQL sets the isolation level in a separate `SET TRANSACTION` statement;
-        // the abstract levels map closely enough to MySQL's default REPEATABLE READ
-        // that we keep the begin statement simple.
+        // The isolation level is applied by `isolation_setup_sql`; the begin itself
+        // is plain.
         "START TRANSACTION".to_string()
     }
 
@@ -237,6 +245,21 @@ mod tests {
         let dialect = MySqlDialect::new();
         assert_eq!(dialect.release_sql("sp1"), "RELEASE SAVEPOINT sp1");
         assert_eq!(dialect.rollback_to_sql("sp1"), "ROLLBACK TO SAVEPOINT sp1");
+    }
+
+    #[test]
+    fn standard_isolation_levels_use_a_set_statement() {
+        use crate::transaction::IsolationLevel;
+
+        let dialect = MySqlDialect::new();
+        assert_eq!(
+            dialect
+                .isolation_setup_sql(IsolationLevel::Serializable)
+                .as_deref(),
+            Some("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        );
+        // The SQLite lock modes leave MySQL's default in place (no SET statement).
+        assert_eq!(dialect.isolation_setup_sql(IsolationLevel::Deferred), None);
     }
 
     #[test]

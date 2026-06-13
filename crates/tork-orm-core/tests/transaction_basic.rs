@@ -118,3 +118,63 @@ async fn concurrent_queries_on_a_transaction_serialize() {
 
     tx.commit().await.unwrap();
 }
+
+#[tokio::test]
+async fn serializable_isolation_runs_on_sqlite() {
+    let db = setup().await;
+    // SQLite maps the standard level onto a plain BEGIN; the builder method works.
+    db.transaction_with()
+        .serializable()
+        .run(|tx| {
+            Box::pin(async move {
+                tx.execute("UPDATE counters SET n = 5 WHERE id = 1".into(), vec![])
+                    .await?;
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(read_n(&db).await, 5);
+}
+
+#[tokio::test]
+async fn transaction_retry_recovers_from_a_transient_conflict() {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use tork_orm_core::OrmError;
+
+    let db = setup().await;
+    let attempts = AtomicU32::new(0);
+
+    // The first attempt fails with a lock-style (retryable) error; the second
+    // succeeds, so the helper retries and commits.
+    let result: tork_orm_core::Result<i64> = db
+        .transaction_retry(5, |tx| {
+            let attempt = attempts.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                if attempt == 0 {
+                    return Err(OrmError::query("database is locked"));
+                }
+                tx.execute("UPDATE counters SET n = 7 WHERE id = 1".into(), vec![])
+                    .await?;
+                Ok(7)
+            })
+        })
+        .await;
+
+    assert_eq!(result.unwrap(), 7);
+    assert_eq!(attempts.load(Ordering::SeqCst), 2, "retried once after the conflict");
+    assert_eq!(read_n(&db).await, 7);
+}
+
+#[tokio::test]
+async fn transaction_retry_gives_up_on_a_non_retryable_error() {
+    use tork_orm_core::OrmError;
+
+    let db = setup().await;
+    let result: tork_orm_core::Result<()> = db
+        .transaction_retry(5, |_tx| {
+            Box::pin(async move { Err(OrmError::query("syntax error near FROM")) })
+        })
+        .await;
+    assert!(result.is_err());
+}

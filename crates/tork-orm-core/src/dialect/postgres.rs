@@ -117,9 +117,12 @@ impl Dialect for PostgresDialect {
         // PostgreSQL has no lock-mode BEGIN variants; map the abstract levels to
         // the nearest standard isolation level.
         let isolation = match level {
+            // The SQLite lock modes map to the nearest standard level.
             IsolationLevel::Deferred => "READ COMMITTED",
             IsolationLevel::Immediate => "REPEATABLE READ",
             IsolationLevel::Exclusive => "SERIALIZABLE",
+            // Standard levels are requested directly.
+            other => other.standard_sql().unwrap_or("READ COMMITTED"),
         };
         format!("BEGIN ISOLATION LEVEL {isolation}")
     }
@@ -217,6 +220,21 @@ mod tests {
             dialect.begin_with_sql(IsolationLevel::Exclusive),
             "BEGIN ISOLATION LEVEL SERIALIZABLE"
         );
+    }
+
+    #[test]
+    fn standard_isolation_levels_render_directly() {
+        let dialect = PostgresDialect::new();
+        assert_eq!(
+            dialect.begin_with_sql(IsolationLevel::Serializable),
+            "BEGIN ISOLATION LEVEL SERIALIZABLE"
+        );
+        assert_eq!(
+            dialect.begin_with_sql(IsolationLevel::ReadCommitted),
+            "BEGIN ISOLATION LEVEL READ COMMITTED"
+        );
+        // The level is folded into the BEGIN, so no separate setup statement.
+        assert_eq!(dialect.isolation_setup_sql(IsolationLevel::Serializable), None);
     }
 
     #[test]

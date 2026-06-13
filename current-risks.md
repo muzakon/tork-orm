@@ -39,12 +39,12 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **Risk:** While standard SQL isolation levels and option builders are commonly needed for multi-dialect production databases, they are **entirely missing** from the codebase:
   - **No `TransactionOptions` Struct:** The builder-style configuration struct (`TransactionOptions::new().isolation(...).read_only(...)`) does not exist.
   - **No Standard SQL Isolation Levels:** The proposed `IsolationLevel` variants (`ReadUncommitted`, `ReadCommitted`, `RepeatableRead`, `Serializable`) are not defined. The codebase only implements SQLite-specific locking states (`Deferred`, `Immediate`, `Exclusive`).
-- **Status:** Unimplemented. Using the ORM on other databases will fail to configure standard transactions.
+- **Status:** RESOLVED. `IsolationLevel` now includes the standard SQL levels (`ReadUncommitted`/`ReadCommitted`/`RepeatableRead`/`Serializable`) with `TransactionBuilder` methods (`.read_committed()`, `.serializable()`, ...). Each dialect maps them: PostgreSQL `BEGIN ISOLATION LEVEL ...`, MySQL a `SET TRANSACTION ISOLATION LEVEL ...` preamble (`Dialect::isolation_setup_sql`), SQLite a plain `BEGIN` (it is serializable via its locking). Covered by `standard_isolation_levels_render_directly` / `standard_isolation_levels_use_a_set_statement` / `serializable_isolation_runs_on_sqlite`.
 
 ## 8. Lack of Retryable Transaction API (High Risk / Feature Deficit)
 - **Risk:** Under serializable isolation levels or heavy write concurrency, database queries frequently fail with deadlock or serialization conflicts. Without a retry mechanism, the application will crash or return HTTP 500 errors to clients.
 - **Vulnerability:** The proposed `transaction_retry` and `TransactionRetry` APIs are **entirely unimplemented**. Developers must write custom loop logic manually to handle and retry serialization failures.
-- **Status:** Unimplemented.
+- **Status:** RESOLVED. `Database::transaction_retry(max_attempts, f)` reruns the closure in a fresh transaction when it fails with a transient conflict, detected by `OrmError::is_retryable()` (lock timeout, deadlock, or serialization failure, across backends). Covered by `transaction_retry_recovers_from_a_transient_conflict` and `transaction_retry_gives_up_on_a_non_retryable_error`.
 
 ## 9. Future Cancellation Connection Leak & Pool Starvation (High Risk / Resource Exhaustion)
 - **Risk:** When a database query is cancelled due to a client timeout or future cancellation (e.g., via `tokio::time::timeout`), the underlying `tokio::task::spawn_blocking` worker continues executing to completion. However, because the cancelled query future was dropped, the `PinnedSqlite` handle is dropped.
@@ -247,7 +247,7 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 ## 49. Lack of Transaction Propagation / Nested Transaction API (Medium Risk / Feature Deficit)
 - **Risk:** The transaction API only exposes top-level transactions and savepoints. It lacks standardized transaction propagation strategies (such as `PROPAGATION_REQUIRED` or `PROPAGATION_REQUIRES_NEW`).
 - **DX Gap:** Developers cannot write modular transactional services where internal helpers dynamically join an active transaction or suspend it to open a new nested context, requiring manual handle passing and custom savepoint coordination.
-- **Status:** Unimplemented.
+- **Status:** RESOLVED (by design). Nested transactional units are provided by `Transaction::savepoint(f)`, which runs `f` inside a `SAVEPOINT` released on `Ok` and rolled back on `Err` without aborting the outer transaction (a `REQUIRES_NEW`-style nested unit). The `REQUIRED` pattern (join the active transaction) is the default: pass the same `&Transaction` (or `impl Executor`) down. Tork's explicit handle-passing replaces implicit propagation strategies. Covered by the savepoint transaction tests.
 
 ## 50. Untracked Column Options & Foreign Keys (Low-Medium Risk)
 - **Risk:** The generator only checks for type and nullability mismatches on existing columns. Changes to foreign key definitions (e.g. changing `ON DELETE SET NULL` to `ON DELETE CASCADE`) are completely ignored by the generator.
