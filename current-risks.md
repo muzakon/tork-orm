@@ -7,7 +7,7 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 ## 1. Preloader Variable Limit Crash (Too Many SQL Variables - High Risk)
 - **Risk:** When preloading a child relation, the preloader constructs an `IN` clause binding all distinct parent keys as parameters ([`preload.rs:L167`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/preload.rs#L167)).
 - **Bug:** Databases enforce limits on the maximum number of query variables (e.g., SQLite restricts this to 999 by default; MSSQL to 2100). If you preload relations for a large number of parent records (e.g., > 1000), the query will crash with a `too many SQL variables` database error.
-- **Status:** Untested and unchunked. The preloader must chunk parent keys into groups of 500 or 999 parameters and run queries sequentially to avoid limits.
+- **Status:** RESOLVED. The preloader chunks distinct parent keys to `Dialect::max_bind_params` (SQLite 999, PostgreSQL/MySQL 65535) and runs one batch query per chunk, merging the rows. Covered by `preload_chunks_keys_past_the_variable_limit`.
 
 ## 2. Critical Data-Loss Bug in `down_to` Migration Rollback (High Risk)
 - **Risk:** The migrator's `FileMigrator::down_to` method calculates the number of steps to roll back as `chain.len().saturating_sub(position + 1)`, where `position` is the target migration's index in the local migration chain ([`files.rs:L189-199`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/migration/files.rs#L189-L199)).
@@ -50,13 +50,13 @@ This document lists the components, edge cases, and features of Tork ORM that ar
 - **Risk:** When a database query is cancelled due to a client timeout or future cancellation (e.g., via `tokio::time::timeout`), the underlying `tokio::task::spawn_blocking` worker continues executing to completion. However, because the cancelled query future was dropped, the `PinnedSqlite` handle is dropped.
 - **Bug:** During query execution, the connection is taken out of `PinnedSqlite` (`self.conn` is `None`). When `PinnedSqlite` drops prematurely during cancellation, its `Drop` implementation sees `None` and does not return the connection to the pool. When the background thread finally completes, the connection is discarded and closed.
 - **Consequence:** Under frequent request timeouts or cancellations, connection handles are permanently lost from the pool, causing massive performance thrashing as new connections are opened and configured continually, leading to thread and descriptor exhaustion.
-- **Status:** Untested and unhandled.
+- **Status:** RESOLVED. The blocking worker now returns the connection to the pool itself and reports the result over a channel, so a cancelled query future no longer drops the connection. The pinned-connection (transaction) path restores its connection through a shared slot for the same reason. Covered by `cancelled_query_returns_its_connection_to_the_pool`.
 
 ## 10. Bulk Create Variable Limit Crash (Too Many SQL Variables - High Risk)
 - **Risk:** The bulk creation implementation [`model.rs:L212-241`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/model.rs#L212-L241) generates a single multi-row `INSERT` statement containing all fields for all rows in a single batch.
 - **Bug:** The number of variables bound in this query is `values.len() * columns.len()`. If this number exceeds the database-enforced parameter limit (e.g. 999 parameters in SQLite), the query will immediately crash with a database error.
 - **Consequence:** Inserting large datasets (e.g. 500 records with 3 columns each) via `bulk_create` will crash the application in production unless developers manually chunk the inputs.
-- **Status:** Untested and unchunked.
+- **Status:** RESOLVED. `bulk_create` splits rows into chunks of `max_bind_params / columns` (per-dialect: SQLite 999, PostgreSQL/MySQL 65535) and runs one INSERT per chunk. Covered by `bulk_create_chunks_past_the_variable_limit`.
 
 ## 11. Migration Branching Conflicts in Git (High Operational Risk)
 - **Risk:** The migration engine requires a strictly linear chain ([`files.rs:L491-495`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/migration/files.rs#L491-L495)).
@@ -104,12 +104,12 @@ This document lists the components, edge cases, and features of Tork ORM that ar
   Post::query().preload(Post::author()).preload(Post::reviewer())
   ```
   will cause a key collision. The second preload step silently overwrites the first in the `relations` map. When calling `.get::<User>()`, the parent will only return the second relation's slice.
-- **Status:** Untested and completely broken in the current implementation.
+- **Status:** RESOLVED. The `relations` map is now keyed by relation identity (type plus join columns), so each relation keeps its own slot. `get_via(&relation)` reads a specific relation's rows; `get::<C>()` still works for the single-relation case. Covered by `two_relations_to_the_same_type_keep_separate_slots`.
 
 ## 18. Infinite Hang on Pool Exhaustion (High Risk)
 - **Risk:** When all connections in the pool are checked out, calling `pool.acquire_pinned()` or `pool.with_connection()` waits on the semaphore permit indefinitely ([`sqlite.rs:L186`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/driver/sqlite.rs#L186)).
 - **Vulnerability:** If there is a connection leak in the application or if execution gets blocked, checking out a connection will hang the entire thread/request indefinitely. Gaining access to a timeout-bounded checkout is currently impossible.
-- **Status:** Untested. A checkout timeout (e.g., returning an error after 15-30 seconds of waiting for a connection) is mandatory for production workloads.
+- **Status:** RESOLVED. Connection checkout is bounded by a timeout (default 30s, configurable via `SqlitePool::with_acquire_timeout`); exceeding it returns a clear timeout error instead of hanging. Covered by `checkout_times_out_instead_of_hanging_forever`.
 
 ## 19. Persistent Broken Connection Poisoning (High Risk)
 - **Risk:** If a connection in the pool hits a terminal database error (e.g. connection timeout, corrupted file, or disk-full error), the driver still returns the connection handle back into the idle pool [`sqlite.rs:L209-211`](file:///Users/muzak/Desktop/tork/orm/crates/tork-orm-core/src/driver/sqlite.rs#L209-L211).

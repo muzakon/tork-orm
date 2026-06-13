@@ -117,6 +117,19 @@ pub trait Dialect: Send + Sync + 'static {
     /// Returns `true` if the backend supports `INSERT ... RETURNING`.
     fn supports_returning(&self) -> bool;
 
+    /// The maximum number of bound parameters a single statement may carry.
+    ///
+    /// Operations that bind one parameter per row or per key (bulk inserts,
+    /// `IN (...)` preloads) must chunk their work so no single statement exceeds
+    /// this limit, or the backend rejects the query (for example SQLite's
+    /// `too many SQL variables`). The default is the conservative SQLite floor;
+    /// backends with a higher ceiling override it.
+    fn max_bind_params(&self) -> usize {
+        // SQLite's historical compile-time default (`SQLITE_MAX_VARIABLE_NUMBER`)
+        // on versions before 3.32; the safe floor across every SQLite build.
+        999
+    }
+
     /// Writes the backend's concrete column type for an abstract [`SqlType`].
     ///
     /// This is the single source of truth for column type spelling in DDL. It

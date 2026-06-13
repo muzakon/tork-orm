@@ -61,6 +61,12 @@ impl Dialect for MySqlDialect {
         false
     }
 
+    fn max_bind_params(&self) -> usize {
+        // The MySQL client/server protocol caps a prepared statement at 65535
+        // placeholders (the `COM_STMT_PREPARE` parameter count is a 16-bit field).
+        65535
+    }
+
     fn map_sql_type(&self, ty: SqlType, out: &mut String) {
         match ty {
             // MySQL has no native boolean; `TINYINT(1)` is the conventional spelling.

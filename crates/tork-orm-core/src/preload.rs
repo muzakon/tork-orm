@@ -68,17 +68,61 @@ impl<E: Executor + Sync> QueryRunner for E {
 /// # let _ = (posts, id);
 /// # }
 /// ```
+/// Identifies one preloaded relation on a parent.
+///
+/// Keyed by the related type plus the join columns so that a parent with two
+/// relations to the *same* child type (for example `author` and `reviewer`,
+/// both `User`) keeps a separate slot for each instead of one silently
+/// overwriting the other.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct RelationKey {
+    type_id: TypeId,
+    from_column: &'static str,
+    to_column: &'static str,
+}
+
+impl RelationKey {
+    fn of<P, C: 'static>(relation: &Relation<P, C>) -> Self {
+        Self {
+            type_id: TypeId::of::<C>(),
+            from_column: relation.from_column(),
+            to_column: relation.to_column(),
+        }
+    }
+}
+
 pub struct Preloaded<M> {
     parent: M,
-    relations: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    relations: HashMap<RelationKey, Box<dyn Any + Send + Sync>>,
 }
 
 impl<M> Preloaded<M> {
     /// Returns the preloaded rows of type `C`, or an empty slice if none were
     /// loaded for this parent.
+    ///
+    /// When the parent has more than one relation to the same child type (for
+    /// example `author` and `reviewer`, both `User`), this returns one of them;
+    /// use [`get_via`](Preloaded::get_via) with the specific relation to select
+    /// exactly which one.
     pub fn get<C: Send + Sync + 'static>(&self) -> &[C] {
+        let type_id = TypeId::of::<C>();
         self.relations
-            .get(&TypeId::of::<C>())
+            .iter()
+            .find(|(key, _)| key.type_id == type_id)
+            .and_then(|(_, boxed)| boxed.downcast_ref::<Vec<C>>())
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Returns the preloaded rows for one specific relation.
+    ///
+    /// Unlike [`get`](Preloaded::get), this disambiguates between multiple
+    /// relations that target the same child type by matching the relation's join
+    /// columns, so `preloaded.get_via(Post::author())` and
+    /// `preloaded.get_via(Post::reviewer())` return their own rows.
+    pub fn get_via<C: Send + Sync + 'static>(&self, relation: &Relation<M, C>) -> &[C] {
+        self.relations
+            .get(&RelationKey::of(relation))
             .and_then(|boxed| boxed.downcast_ref::<Vec<C>>())
             .map(Vec::as_slice)
             .unwrap_or(&[])
@@ -105,7 +149,7 @@ impl<M> Deref for Preloaded<M> {
 
 /// The result of running one preload plan over the parents.
 struct PlanOutput {
-    type_id: TypeId,
+    key: RelationKey,
     /// One boxed `Vec<C>` per parent, in the same order as the parents.
     per_parent: Vec<Box<dyn Any + Send + Sync>>,
 }
@@ -145,41 +189,57 @@ impl<M: Model, C: Model> PreloadStep<M> for RelationPreload<M, C> {
                 }
             }
 
+            let relation_key = RelationKey::of(&self.relation);
+
             // No keys means nothing to load; every parent gets an empty list.
             if keys.is_empty() {
                 return Ok(PlanOutput {
-                    type_id: TypeId::of::<C>(),
+                    key: relation_key,
                     per_parent: parents.iter().map(|_| empty_children::<C>()).collect(),
                 });
             }
 
-            // One follow-up query loads every related row.
-            let projection = C::COLUMNS
-                .iter()
-                .map(|column| SelectItem::Column {
-                    table: C::TABLE,
-                    column: column.name,
-                })
-                .collect();
-            let mut statement = SelectStatement::new(C::TABLE, projection);
-            statement
-                .filters
-                .push(Expr::in_list(Expr::column(C::TABLE, to_column), keys));
-            statement
-                .filters
-                .extend(self.relation.preload_filters().iter().cloned());
-            statement
-                .order_by
-                .extend(self.relation.preload_order_by().iter().cloned());
+            // The IN (...) list binds one parameter per distinct key, which can
+            // exceed the backend's bind-parameter ceiling for large parent sets
+            // (SQLite's `too many SQL variables`). Split the keys into chunks that
+            // fit `Dialect::max_bind_params`, running one query each and merging
+            // the rows. A small margin leaves room for the relation's own preload
+            // filters, which bind additional parameters.
+            const FILTER_PARAM_MARGIN: usize = 16;
+            let chunk_size = runner
+                .dialect()
+                .max_bind_params()
+                .saturating_sub(FILTER_PARAM_MARGIN)
+                .max(1);
 
-            let (sql, params) = render_select(runner.dialect(), &statement);
-            let rows = runner.fetch_all(sql, params).await?;
-
-            // Group the related rows by their join key.
+            // Group the related rows by their join key, accumulated across chunks.
             let mut groups: HashMap<String, Vec<Row>> = HashMap::new();
-            for row in rows {
-                let key = value_key(&row.get::<Value>(to_column)?);
-                groups.entry(key).or_default().push(row);
+            for key_chunk in keys.chunks(chunk_size) {
+                let projection = C::COLUMNS
+                    .iter()
+                    .map(|column| SelectItem::Column {
+                        table: C::TABLE,
+                        column: column.name,
+                    })
+                    .collect();
+                let mut statement = SelectStatement::new(C::TABLE, projection);
+                statement.filters.push(Expr::in_list(
+                    Expr::column(C::TABLE, to_column),
+                    key_chunk.to_vec(),
+                ));
+                statement
+                    .filters
+                    .extend(self.relation.preload_filters().iter().cloned());
+                statement
+                    .order_by
+                    .extend(self.relation.preload_order_by().iter().cloned());
+
+                let (sql, params) = render_select(runner.dialect(), &statement);
+                let rows = runner.fetch_all(sql, params).await?;
+                for row in rows {
+                    let key = value_key(&row.get::<Value>(to_column)?);
+                    groups.entry(key).or_default().push(row);
+                }
             }
 
             // Map each parent's group into instances, preserving parent order.
@@ -199,7 +259,7 @@ impl<M: Model, C: Model> PreloadStep<M> for RelationPreload<M, C> {
             }
 
             Ok(PlanOutput {
-                type_id: TypeId::of::<C>(),
+                key: relation_key,
                 per_parent,
             })
         })
@@ -284,13 +344,13 @@ impl<M: Model> Preloader<M> {
     /// Runs the query and preloads, returning each parent with its related rows.
     pub async fn all<E: Executor + Sync>(self, executor: E) -> crate::Result<Vec<Preloaded<M>>> {
         let parents = self.base.all(&executor).await?;
-        let mut relation_maps: Vec<HashMap<TypeId, Box<dyn Any + Send + Sync>>> =
+        let mut relation_maps: Vec<HashMap<RelationKey, Box<dyn Any + Send + Sync>>> =
             (0..parents.len()).map(|_| HashMap::new()).collect();
 
         for plan in &self.plans {
             let output = plan.load(&parents, &executor).await?;
             for (index, children) in output.per_parent.into_iter().enumerate() {
-                relation_maps[index].insert(output.type_id, children);
+                relation_maps[index].insert(output.key.clone(), children);
             }
         }
 

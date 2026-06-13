@@ -63,6 +63,12 @@ impl Dialect for PostgresDialect {
         true
     }
 
+    fn max_bind_params(&self) -> usize {
+        // The PostgreSQL wire protocol encodes the parameter count as an
+        // unsigned 16-bit integer, capping a single statement at 65535 binds.
+        65535
+    }
+
     fn supports_distinct_on(&self) -> bool {
         true
     }

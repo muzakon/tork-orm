@@ -471,15 +471,28 @@ pub trait Model: FromRow + ModelHooks + Clone + Send + Sync + 'static {
                 .iter()
                 .map(|value| value.insert_values().into_iter().map(|(_, v)| v).collect())
                 .collect();
-            let statement = InsertStatement {
-                table: Self::TABLE,
-                columns,
-                rows,
-                returning: Vec::new(),
-                on_conflict: OnConflict::None,
-            };
-            let (sql, params) = render_insert(executor.dialect(), &statement);
-            Ok(executor.execute(sql, params).await?.rows_affected)
+
+            // A single multi-row INSERT binds `rows * columns` parameters, which
+            // can exceed the backend's bind-parameter ceiling (for example
+            // SQLite's `too many SQL variables`). Split the rows into chunks that
+            // each stay within `Dialect::max_bind_params`, running one INSERT per
+            // chunk. Pass a transaction executor if the whole insert must be atomic.
+            let column_count = columns.len().max(1);
+            let rows_per_chunk = (executor.dialect().max_bind_params() / column_count).max(1);
+
+            let mut affected = 0u64;
+            for chunk in rows.chunks(rows_per_chunk) {
+                let statement = InsertStatement {
+                    table: Self::TABLE,
+                    columns: columns.clone(),
+                    rows: chunk.to_vec(),
+                    returning: Vec::new(),
+                    on_conflict: OnConflict::None,
+                };
+                let (sql, params) = render_insert(executor.dialect(), &statement);
+                affected += executor.execute(sql, params).await?.rows_affected;
+            }
+            Ok(affected)
         }
     }
 

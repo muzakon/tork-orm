@@ -25,7 +25,7 @@ assert_eq!(stored_user.id, 1);
 ```
 
 ### B. Bulk Inserting Instances (`Model::bulk_create`)
-To insert multiple records efficiently in a single query, use `<Model>::bulk_create`. It returns the number of inserted rows as a `usize`.
+To insert multiple records efficiently, use `<Model>::bulk_create`. It returns the number of inserted rows as a `u64`.
 
 ```rust
 let batch = [
@@ -37,6 +37,16 @@ let inserted_count = User::bulk_create(&db, &batch).await?;
 assert_eq!(inserted_count, 2);
 ```
 *Note: If the input slice is empty, `bulk_create` returns `0` immediately without querying the database.*
+
+A single multi-row insert binds one parameter per column per row, and databases cap how many parameters one statement may carry (SQLite 999, PostgreSQL and MySQL 65535). `bulk_create` splits large batches into chunks that stay within the active backend's limit and runs one insert per chunk, so inserting thousands of rows just works instead of failing with `too many SQL variables`. Each chunk is its own statement; pass a transaction executor if the whole batch must be atomic:
+
+```rust
+db.transaction(|tx| Box::pin(async move {
+    User::bulk_create(&tx, &ten_thousand_users).await?;
+    Ok(())
+}))
+.await?;
+```
 
 ---
 

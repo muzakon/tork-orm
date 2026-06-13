@@ -10,10 +10,11 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use rusqlite::types::{ToSqlOutput, Value as SqliteValue, ValueRef};
 use rusqlite::{Connection, ToSql};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{oneshot, OwnedSemaphorePermit, Semaphore};
 
 use crate::driver::ExecuteResult;
 use crate::error::OrmError;
@@ -25,6 +26,13 @@ use crate::value::Value;
 /// With write-ahead logging a brief wait lets concurrent writers serialize
 /// instead of failing immediately with `SQLITE_BUSY`.
 const BUSY_TIMEOUT_MS: u32 = 5_000;
+
+/// How long a connection checkout waits for a free pool slot before failing.
+///
+/// Without a bound, a connection leak or a stuck query would make every later
+/// checkout hang forever; a timeout turns that into a recoverable error so the
+/// request fails fast instead of wedging the whole server.
+const DEFAULT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How a connection should be opened.
 #[derive(Debug, Clone)]
@@ -41,6 +49,23 @@ struct Inner {
     idle: Mutex<Vec<Connection>>,
     semaphore: Arc<Semaphore>,
     statements: AtomicU64,
+    acquire_timeout: Duration,
+}
+
+impl Inner {
+    /// Waits for a pool slot, failing with a clear error if the wait exceeds the
+    /// configured checkout timeout or the pool has been closed.
+    async fn acquire_permit(&self) -> crate::Result<OwnedSemaphorePermit> {
+        let acquire = Arc::clone(&self.semaphore).acquire_owned();
+        match tokio::time::timeout(self.acquire_timeout, acquire).await {
+            Ok(Ok(permit)) => Ok(permit),
+            Ok(Err(_)) => Err(OrmError::connection("connection pool is closed")),
+            Err(_) => Err(OrmError::connection(format!(
+                "timed out after {}s waiting for a database connection",
+                self.acquire_timeout.as_secs()
+            ))),
+        }
+    }
 }
 
 impl Inner {
@@ -100,8 +125,25 @@ impl SqlitePool {
                 idle: Mutex::new(Vec::new()),
                 semaphore: Arc::new(Semaphore::new(permits)),
                 statements: AtomicU64::new(0),
+                acquire_timeout: DEFAULT_ACQUIRE_TIMEOUT,
             }),
         })
+    }
+
+    /// Overrides how long a connection checkout waits for a free slot before
+    /// failing with a timeout error (default 30 seconds).
+    ///
+    /// Must be called before the pool is cloned or shared, as it rebuilds the
+    /// shared state. A zero duration keeps the default.
+    pub fn with_acquire_timeout(mut self, timeout: Duration) -> Self {
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.acquire_timeout = if timeout.is_zero() {
+                DEFAULT_ACQUIRE_TIMEOUT
+            } else {
+                timeout
+            };
+        }
+        self
     }
 
     /// Runs a query that returns rows.
@@ -139,10 +181,7 @@ impl SqlitePool {
     /// size. The connection returns to the pool when the handle is dropped. Used by
     /// the migration runner and the transaction API to pin a connection.
     pub(crate) async fn acquire_pinned(&self) -> crate::Result<PinnedSqlite> {
-        let permit = Arc::clone(&self.inner.semaphore)
-            .acquire_owned()
-            .await
-            .map_err(|_| OrmError::connection("connection pool is closed"))?;
+        let permit = self.inner.acquire_permit().await?;
 
         let checked_out = lock(&self.inner.idle).pop();
         let conn = match checked_out {
@@ -157,7 +196,7 @@ impl SqlitePool {
 
         Ok(PinnedSqlite {
             inner: Arc::clone(&self.inner),
-            conn: Mutex::new(Some(conn)),
+            conn: Arc::new(Mutex::new(Some(conn))),
             _permit: permit,
         })
     }
@@ -179,37 +218,41 @@ impl SqlitePool {
     {
         self.inner.statements.fetch_add(1, Ordering::Relaxed);
 
-        // Bound concurrency before touching the blocking pool.
-        let _permit = self
-            .inner
-            .semaphore
-            .acquire()
-            .await
-            .map_err(|_| OrmError::connection("connection pool is closed"))?;
+        // Bound concurrency before touching the blocking pool, failing fast if no
+        // slot frees up within the checkout timeout instead of hanging forever.
+        let permit = self.inner.acquire_permit().await?;
 
         let checked_out = lock(&self.inner.idle).pop();
         let inner = Arc::clone(&self.inner);
 
-        let (returned, result) = tokio::task::spawn_blocking(move || {
+        // The blocking task returns the connection to the pool itself and reports
+        // the result over a channel. This way, if the caller's future is cancelled
+        // (for example by `tokio::time::timeout`) while the query runs, the
+        // connection is still returned rather than dropped, so the pool never
+        // leaks connections under request cancellation. The permit is held inside
+        // the task so the concurrency bound stays correct until the work finishes.
+        let (tx, rx) = oneshot::channel();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
             let mut conn = match checked_out {
                 Some(conn) => conn,
                 None => match inner.open() {
                     Ok(conn) => conn,
-                    Err(error) => return (None, Err(error)),
+                    Err(error) => {
+                        let _ = tx.send(Err(error));
+                        return;
+                    }
                 },
             };
             // A query error does not poison the connection, so it goes back to the
             // pool regardless; only a failed open leaves us without one.
             let result = work(&mut conn);
-            (Some(conn), result)
-        })
-        .await
-        .map_err(|error| OrmError::query(format!("database worker failed: {error}")))?;
+            lock(&inner.idle).push(conn);
+            let _ = tx.send(result);
+        });
 
-        if let Some(conn) = returned {
-            lock(&self.inner.idle).push(conn);
-        }
-        result
+        rx.await
+            .map_err(|_| OrmError::query("database worker was dropped before completing"))?
     }
 }
 
@@ -341,7 +384,7 @@ fn execute(conn: &mut Connection, sql: &str, params: &[Value]) -> crate::Result<
 /// Returns the connection to the pool when dropped.
 pub(crate) struct PinnedSqlite {
     inner: Arc<Inner>,
-    conn: Mutex<Option<Connection>>,
+    conn: Arc<Mutex<Option<Connection>>>,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -355,9 +398,27 @@ impl PinnedSqlite {
             .ok_or_else(|| OrmError::query("pinned connection is already in use"))
     }
 
-    /// Returns a connection after an operation completes.
-    fn put_conn(&self, conn: Connection) {
-        *self.conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(conn);
+    /// Runs one blocking operation on the pinned connection.
+    ///
+    /// The connection is restored to the shared slot inside the blocking task, so
+    /// if the caller's future is cancelled mid-statement the connection is still
+    /// returned to the handle (and, on drop, to the pool) rather than being lost.
+    async fn run<F, T>(&self, work: F) -> crate::Result<T>
+    where
+        F: FnOnce(&mut Connection) -> crate::Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        self.inner.statements.fetch_add(1, Ordering::Relaxed);
+        let mut conn = self.take_conn()?;
+        let slot = Arc::clone(&self.conn);
+        let (tx, rx) = oneshot::channel();
+        tokio::task::spawn_blocking(move || {
+            let result = work(&mut conn);
+            *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(conn);
+            let _ = tx.send(result);
+        });
+        rx.await
+            .map_err(|_| OrmError::query("database worker was dropped before completing"))?
     }
 
     /// Runs a row-returning query on the pinned connection.
@@ -366,16 +427,7 @@ impl PinnedSqlite {
         sql: String,
         params: Vec<Value>,
     ) -> crate::Result<Vec<Row>> {
-        self.inner.statements.fetch_add(1, Ordering::Relaxed);
-        let mut conn = self.take_conn()?;
-        let (conn, result) = tokio::task::spawn_blocking(move || {
-            let result = fetch_all(&mut conn, &sql, &params);
-            (conn, result)
-        })
-        .await
-        .map_err(|e| OrmError::query(format!("database worker failed: {e}")))?;
-        self.put_conn(conn);
-        result
+        self.run(move |conn| fetch_all(conn, &sql, &params)).await
     }
 
     /// Runs a non-row-returning statement on the pinned connection.
@@ -384,30 +436,12 @@ impl PinnedSqlite {
         sql: String,
         params: Vec<Value>,
     ) -> crate::Result<ExecuteResult> {
-        self.inner.statements.fetch_add(1, Ordering::Relaxed);
-        let mut conn = self.take_conn()?;
-        let (conn, result) = tokio::task::spawn_blocking(move || {
-            let result = execute(&mut conn, &sql, &params);
-            (conn, result)
-        })
-        .await
-        .map_err(|e| OrmError::query(format!("database worker failed: {e}")))?;
-        self.put_conn(conn);
-        result
+        self.run(move |conn| execute(conn, &sql, &params)).await
     }
 
     /// Runs a batch of statements on the pinned connection.
     pub(crate) async fn execute_batch(&self, sql: String) -> crate::Result<()> {
-        self.inner.statements.fetch_add(1, Ordering::Relaxed);
-        let mut conn = self.take_conn()?;
-        let (conn, result) = tokio::task::spawn_blocking(move || {
-            let result = execute_batch(&mut conn, &sql);
-            (conn, result)
-        })
-        .await
-        .map_err(|e| OrmError::query(format!("database worker failed: {e}")))?;
-        self.put_conn(conn);
-        result
+        self.run(move |conn| execute_batch(conn, &sql)).await
     }
 
     /// Rolls back synchronously without `spawn_blocking`.
@@ -419,7 +453,7 @@ impl PinnedSqlite {
     pub(crate) fn rollback_now(&self) {
         if let Ok(conn) = self.take_conn() {
             let _ = conn.execute_batch("ROLLBACK");
-            self.put_conn(conn);
+            *self.conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(conn);
         }
     }
 }
@@ -434,5 +468,87 @@ impl Drop for PinnedSqlite {
         {
             lock(&self.inner.idle).push(conn);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    impl SqlitePool {
+        /// Number of connections currently idle in the pool (test-only).
+        fn idle_len(&self) -> usize {
+            lock(&self.inner.idle).len()
+        }
+    }
+
+    /// A row-returning query slow enough to be cancelled by a sub-millisecond
+    /// timeout: a recursive CTE counting to several million.
+    const SLOW_QUERY: &str = "WITH RECURSIVE c(n) AS (SELECT 1 UNION ALL \
+         SELECT n + 1 FROM c WHERE n < 4000000) SELECT count(*) FROM c";
+
+    #[tokio::test]
+    async fn checkout_times_out_instead_of_hanging_forever() {
+        // One connection, a short checkout timeout. Pinning the only connection
+        // leaves a pooled query with no slot, so it must fail fast rather than
+        // wait forever.
+        let pool = SqlitePool::new(":memory:", 1)
+            .unwrap()
+            .with_acquire_timeout(Duration::from_millis(50));
+
+        let pinned = pool.acquire_pinned().await.unwrap();
+
+        let start = std::time::Instant::now();
+        let result = pool.fetch_all("SELECT 1".into(), vec![]).await;
+        let waited = start.elapsed();
+
+        let error = result.expect_err("checkout should time out");
+        assert!(
+            error.to_string().contains("timed out"),
+            "expected a timeout error, got: {error}"
+        );
+        assert!(waited < Duration::from_secs(5), "must fail fast, not hang");
+
+        // Releasing the pinned connection lets the next query proceed.
+        drop(pinned);
+        let rows = pool.fetch_all("SELECT 1".into(), vec![]).await.unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn cancelled_query_returns_its_connection_to_the_pool() {
+        // A query whose future is cancelled (here by a timeout firing before it
+        // finishes) must not lose its connection: the blocking task returns it to
+        // the pool so later checkouts reuse it instead of the pool thrashing.
+        let pool = SqlitePool::new(":memory:", 1).unwrap();
+
+        let cancelled = tokio::time::timeout(
+            Duration::from_millis(1),
+            pool.fetch_all(SLOW_QUERY.into(), vec![]),
+        )
+        .await;
+        assert!(
+            cancelled.is_err(),
+            "the slow query should be cancelled by the timeout"
+        );
+
+        // The blocking task is still finishing the query; once it does, it returns
+        // the connection to the idle pool. Wait for that to happen.
+        let mut returned = false;
+        for _ in 0..200 {
+            if pool.idle_len() == 1 {
+                returned = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(
+            returned,
+            "the cancelled query's connection was never returned to the pool"
+        );
+
+        // And the pool still serves queries on that single recovered connection.
+        let rows = pool.fetch_all("SELECT 1".into(), vec![]).await.unwrap();
+        assert_eq!(rows.len(), 1);
     }
 }

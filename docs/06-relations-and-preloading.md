@@ -142,6 +142,8 @@ let queries_run = db.statement_count() - before;
 assert_eq!(queries_run, 2);
 ```
 
+The `IN (...)` list binds one parameter per distinct parent key, and databases cap how many parameters one statement may carry (SQLite 999, PostgreSQL and MySQL 65535). When you preload more parents than that ceiling, Tork ORM transparently splits the keys into chunks and runs one batch query per chunk, then stitches every child back onto its parent. Preloading 10,000 parents simply runs a few batch queries instead of failing with `too many SQL variables`.
+
 ### Many-to-One Preloading
 Preloading works identically in reverse:
 
@@ -158,3 +160,22 @@ for post in posts {
     }
 }
 ```
+
+### Two Relations to the Same Type (`get_via`)
+`get::<C>()` looks rows up by their model type, which is ambiguous when a parent has **two relations to the same child type** (for example an `Article` with both an `author` and an `editor`, each a `User`). Preload both, then read each one with `get_via`, passing the specific relation:
+
+```rust
+let articles = Article::query()
+    .preload(Article::author())
+    .preload(Article::editor())
+    .all(&db)
+    .await?;
+
+for article in &articles {
+    let author = article.get_via(&Article::author());
+    let editor = article.get_via(&Article::editor());
+    // Each relation keeps its own rows; neither overwrites the other.
+}
+```
+
+`get_via` distinguishes the relations by their join columns. `get::<C>()` still works when there is only one relation to a type; reach for `get_via` only when a parent preloads more than one relation to the same type.

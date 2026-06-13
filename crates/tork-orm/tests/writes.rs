@@ -88,6 +88,28 @@ async fn bulk_create_of_nothing_is_a_noop() {
 }
 
 #[tokio::test]
+async fn bulk_create_chunks_past_the_variable_limit() {
+    // Three bound columns per row (the auto id is excluded), so 500 rows would
+    // bind 1500 parameters in a single INSERT and exceed SQLite's 999-variable
+    // limit. The chunked implementation must split this into several statements
+    // and still insert every row.
+    let db = empty_db().await;
+    let users: Vec<User> = (0..500).map(|i| new_user(&format!("user{i}"))).collect();
+
+    let inserted = User::bulk_create(&db, &users).await.unwrap();
+    assert_eq!(inserted, 500);
+    assert_eq!(User::query().count(&db).await.unwrap(), 500);
+
+    // A spot check confirms the rows are real, not just a count.
+    let last = User::query()
+        .filter(User::username.eq("user499"))
+        .first(&db)
+        .await
+        .unwrap();
+    assert!(last.is_some());
+}
+
+#[tokio::test]
 async fn save_writes_back_current_field_values() {
     let db = empty_db().await;
     let mut stored = User::create(&db, &new_user("alice")).await.unwrap();

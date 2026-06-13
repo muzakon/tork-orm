@@ -160,3 +160,62 @@ async fn belongs_to_preload_loads_the_parent() {
     let bob = posts[2].get::<User>();
     assert_eq!(bob[0].username, "bob");
 }
+
+#[tokio::test]
+async fn preload_chunks_keys_past_the_variable_limit() {
+    // Preloading a relation binds one parameter per distinct parent key in an
+    // IN (...) clause. With 1500 parents that exceeds SQLite's 999-variable
+    // limit, so the preloader must split the keys into chunks and still stitch
+    // every child back onto its parent.
+    let db = Database::connect(":memory:", 1).await.unwrap();
+    db.execute(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL)".into(),
+        vec![],
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, title TEXT NOT NULL, published INTEGER NOT NULL)".into(),
+        vec![],
+    )
+    .await
+    .unwrap();
+
+    const PARENTS: i64 = 1500;
+    let users: Vec<User> = (0..PARENTS)
+        .map(|i| User {
+            id: 0,
+            username: format!("user{i}"),
+        })
+        .collect();
+    User::bulk_create(&db, &users).await.unwrap();
+    let posts: Vec<Post> = (1..=PARENTS)
+        .map(|id| Post {
+            id: 0,
+            user_id: id,
+            title: format!("post{id}"),
+            published: true,
+        })
+        .collect();
+    Post::bulk_create(&db, &posts).await.unwrap();
+
+    let loaded = User::query()
+        .order_by(User::id.asc())
+        .preload(User::posts())
+        .all(&db)
+        .await
+        .unwrap();
+
+    assert_eq!(loaded.len(), PARENTS as usize);
+    let total_posts: usize = loaded.iter().map(|u| u.get::<Post>().len()).sum();
+    assert_eq!(
+        total_posts, PARENTS as usize,
+        "every parent keeps its child across chunks"
+    );
+    // The first and last parents fall on different chunk boundaries.
+    assert_eq!(loaded[0].get::<Post>()[0].title, "post1");
+    assert_eq!(
+        loaded[(PARENTS - 1) as usize].get::<Post>()[0].title,
+        format!("post{PARENTS}")
+    );
+}
