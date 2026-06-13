@@ -35,7 +35,7 @@ mod commands;
 mod config;
 mod output;
 pub mod scaffold;
-mod style;
+pub mod style;
 
 use std::ffi::OsString;
 use std::process::ExitCode;
@@ -46,7 +46,8 @@ use tork_orm::{Database, OrmError};
 
 use cli::{parse_down_target, parse_up_target, Cli, MigrateCommand, TopCommand};
 use config::Config;
-use style::Style;
+
+pub use style::{sym, Style};
 
 /// Parses `args`, runs the requested command, and returns a process exit code.
 ///
@@ -83,16 +84,28 @@ where
 
 /// Resolves configuration, opens the database, and runs the chosen command.
 async fn dispatch(cli: &Cli, style: &Style) -> Result<(), OrmError> {
-    let config = Config::resolve(&cli.global);
-
     let TopCommand::Migrate(command) = &cli.command;
+    run_migrate(command, &cli.global, style).await
+}
+
+/// Runs a single `migrate` subcommand against the resolved project configuration.
+///
+/// This is the reusable entry point the unified `tork` CLI calls to provide
+/// `tork migrate ...` with the exact same behavior and colored output as the
+/// standalone `tork-orm` binary.
+pub async fn run_migrate(
+    command: &MigrateCommand,
+    global: &cli::GlobalArgs,
+    style: &Style,
+) -> Result<(), OrmError> {
+    let config = Config::resolve(global);
 
     // Scaffolding commands touch only the filesystem — no database needed.
     match command {
         MigrateCommand::Create { name } => {
             return commands::create::run(style, &config.dir, &config.migrations, name)
         }
-        MigrateCommand::Init => return commands::init::run(style, &config.dir, cli.global.yes),
+        MigrateCommand::Init => return commands::init::run(style, &config.dir, global.yes),
         _ => {}
     }
 
@@ -108,7 +121,7 @@ async fn dispatch(cli: &Cli, style: &Style) -> Result<(), OrmError> {
                 &migrator,
                 style,
                 parse_down_target(target.as_deref()),
-                cli.global.yes,
+                global.yes,
             )
             .await
         }
