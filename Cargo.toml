@@ -35,8 +35,9 @@ tork-orm-config = { path = "crates/tork-orm-config", version = "0.1.0" }
 toml = "0.8"
 
 # Framework crates, by relative path, for the native integration (`tork` feature).
-tork = { path = "../framework/crates/tork" }
-tork-core = { path = "../framework/crates/tork-core" }
+# The `version` is used when publishing to crates.io; the `path` is used locally.
+tork = { path = "../framework/crates/tork", version = "0.1.0" }
+tork-core = { path = "../framework/crates/tork-core", version = "0.1.0" }
 
 # SQLite driver: the safe binding with libsqlite3 statically bundled, so a built
 # binary carries no shared-library dependency.

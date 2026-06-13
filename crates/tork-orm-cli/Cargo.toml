@@ -20,7 +20,7 @@ postgres = ["tork-orm/postgres"]
 mysql = ["tork-orm/mysql"]
 
 [dependencies]
-tork-orm = { path = "../tork-orm", default-features = false, features = ["sqlite", "migrations"] }
+tork-orm = { path = "../tork-orm", version = "0.1.0", default-features = false, features = ["sqlite", "migrations"] }
 tork-orm-config = { workspace = true }
 tokio = { workspace = true }
 clap = { workspace = true }
